@@ -252,7 +252,9 @@ void Register::initCustomStyle() {
                 brls::getStyle().addMetric("wiliwili/grid/span/2", 2);
         }
         float playerWidth = brls::Application::ORIGINAL_WINDOW_WIDTH - 480;
-        if (playerWidth < brls::Application::ORIGINAL_WINDOW_WIDTH * 0.5f)
+        if (brls::Application::ORIGINAL_WINDOW_WIDTH < 900)
+            playerWidth = brls::Application::ORIGINAL_WINDOW_WIDTH * 0.55f;
+        else if (playerWidth < brls::Application::ORIGINAL_WINDOW_WIDTH * 0.5f)
             playerWidth = brls::Application::ORIGINAL_WINDOW_WIDTH * 0.5f;
         brls::getStyle().addMetric("wiliwili/player/width", playerWidth);
         brls::getStyle().addMetric("wiliwili/player/bottom/font",

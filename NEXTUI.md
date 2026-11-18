@@ -81,6 +81,8 @@ The scale setting now applies on tg5040 too: **480p** (854x480 canvas, 1.2x) is
 the default and **400p** (712x400, 1.44x) is the largest option. The SDL window
 stays at the full 1024x768 panel size; only the logical canvas changes, and the
 setting requires a relaunch (the app exits to the NextUI desktop on change).
+At both large steps the player puts the UP row and the like/coin/favorite/share
+row on separate lines so the action buttons and their counts cannot overlap.
 
 ## Build
 

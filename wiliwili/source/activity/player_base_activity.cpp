@@ -200,6 +200,21 @@ private:
 void BasePlayerActivity::onContentAvailable() { this->setCommonData(); }
 
 void BasePlayerActivity::setCommonData() {
+    // 大缩放档 (400p/480p) 下左栏较窄：把 UP 主行和操作按钮改为上下排列，
+    // 避免四个操作按钮挤在一行互相重叠，同时让 UP 主行拿到完整宽度。
+    if (brls::Application::ORIGINAL_WINDOW_WIDTH < 900) {
+        this->videoInfoRow->setAxis(brls::Axis::COLUMN);
+        this->videoInfoRow->setAlignItems(brls::AlignItems::STRETCH);
+        this->videoInfoRow->setJustifyContent(brls::JustifyContent::FLEX_START);
+        this->videoInfoUserBox->setWidthPercentage(100);
+        this->videoInfoUserBox->setHeight(100);
+        this->videoInfoUserBox->setGrow(0);
+        this->videoActionBox->setWidthPercentage(100);
+        this->videoActionBox->setPaddingLeft(10);
+        this->videoActionBox->setMarginTop(4);
+        this->videoActionBox->setJustifyContent(brls::JustifyContent::FLEX_START);
+    }
+
     // 视频评论
     recyclingGrid->registerCell("Cell", []() { return VideoComment::create(); });
 

@@ -108,6 +108,9 @@ protected:
     BRLS_BIND(VideoView, video, "video");
     BRLS_BIND(brls::AppletFrame, appletFrame, "video/detail/frame");
     BRLS_BIND(UserInfoView, videoUserInfo, "video_author");
+    BRLS_BIND(brls::Box, videoInfoRow, "video/info/row");
+    BRLS_BIND(brls::Box, videoInfoUserBox, "video/info/user");
+    BRLS_BIND(brls::Box, videoActionBox, "video/action/box");
     BRLS_BIND(brls::Box, videoTitleBox, "video/title/box");
     BRLS_BIND(brls::Label, videoTitleLabel, "video/title");
     BRLS_BIND(brls::Label, videoBVIDLabel, "video/bvid");
