@@ -69,6 +69,11 @@ for lib in "$PAK"/lib/*.so*; do
     "$strip" --strip-unneeded "$lib" 2>/dev/null || true
 done
 
+# License material: wiliwili is GPLv3 and the pak bundles GPL/LGPL components.
+mkdir -p "$PAK/licenses"
+cp "$ROOT/LICENSE" "$PAK/licenses/wiliwili-GPL-3.0.txt"
+cp "$ROOT/docs/THIRD-PARTY.md" "$PAK/licenses/THIRD-PARTY.md"
+
 # Sanity checks before packaging: right machine, executable launch script, and
 # every NEEDED entry either bundled or part of the device allowlist.
 if ! "${CROSS_TRIPLE}-readelf" -h "$PAK/bin/wiliwili" | grep -q 'AArch64'; then
@@ -79,7 +84,7 @@ test -x "$PAK/launch.sh"
 
 rm -f "$DIST/WiliWili.pakz"
 ( cd "$PAK" && zip -qrX "$DIST/WiliWili.pakz" \
-    launch.sh pak.json icon.png bin lib resources res )
+    launch.sh pak.json icon.png bin lib resources res licenses )
 
 echo "==> pak contents:"
 du -sh "$PAK" "$PAK/bin" "$PAK/lib" "$PAK/resources"
