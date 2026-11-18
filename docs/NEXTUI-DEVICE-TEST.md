@@ -57,9 +57,8 @@ Prepare:
 18. Press HOME while a video plays: NextUI's system panel must appear over the
     picture, `Resume` must return to the app, `Exit to desktop` must close it
     and return to the desktop within ~2 s.
-19. After exit: `ps` shows no leftover `wiliwili`; `/tmp/stay_awake` is gone.
-20. Kill the app from ADB (`kill <pid>`): the desktop must come back and the
-    panel must not stay awake.
+19. After exit: `ps` shows no leftover `wiliwili` and the desktop is back.
+20. Kill the app from ADB (`kill <pid>`): the desktop must come back.
 21. Reboot: launch again, confirm the config (login, quality, volume) persisted.
 
 ## 6. Failure triage

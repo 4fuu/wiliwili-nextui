@@ -21,6 +21,7 @@ The only community material consulted was the build *approach*; every binary in
 | Login | QR code login (Bilibili app scan) |
 | HTTPS | system CA bundle at `/mnt/SDCARD/.system/res/ca-bundle.crt`, bundled fallback |
 | Exit | returns to the NextUI desktop; HOME is owned by NextUI's system overlay |
+| Sleep | none needed: the desktop's idle-sleep loop does not run while an app is foregrounded |
 | Config | `$SHARED_USERDATA_PATH/wiliwili/wiliwili_config.json` |
 | Logs | `$LOGS_PATH/WiliWili.txt` |
 
@@ -175,9 +176,10 @@ Tools/tg5040/WiliWili.pak/
 ```
 
 `launch.sh` sets `LD_LIBRARY_PATH`, `XDG_CONFIG_HOME`, `HOME`,
-`SDL_AUDIODRIVER=alsa`, `CURL_CA_BUNDLE`/`SSL_CERT_FILE`, writes
-`/tmp/stay_awake`, and removes it on exit. It intentionally does not `exec`
-over itself so the cleanup trap always runs. The SDL video driver is left on
+`SDL_AUDIODRIVER=alsa` and `CURL_CA_BUNDLE`/`SSL_CERT_FILE`, then runs the
+binary and returns its exit status. NextUI needs no sleep integration for
+foreground apps: the desktop process exits when a pak launches, so the idle
+sleep loop that lives in it is not running. The SDL video driver is left on
 auto-selection: the vendor driver is named `mali`, and forcing a name that a
 future image renames would abort startup.
 

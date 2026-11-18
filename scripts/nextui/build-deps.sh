@@ -71,7 +71,7 @@ c = '${CROSS}gcc'
 cpp = '${CROSS}g++'
 ar = '${CROSS}ar'
 strip = '${CROSS}strip'
-pkgconfig = 'pkg-config'
+pkg-config = 'pkg-config'
 
 [host_machine]
 system = 'linux'
@@ -124,7 +124,7 @@ build_harfbuzz() {
     # closure stays small and does not depend on the device's fontconfig.
     meson_setup "$BUILD/harfbuzz" "$SRC/harfbuzz-$HARFBUZZ_VERSION" \
         -Dfreetype=disabled -Dglib=disabled -Dgobject=disabled -Dcairo=disabled \
-        -Dchafa=disabled -Dicu=disabled -Dgraphite2=disabled -Dsubset=disabled \
+        -Dchafa=disabled -Dicu=disabled -Dgraphite2=disabled \
         -Dtests=disabled -Ddocs=disabled -Dutilities=disabled -Dintrospection=disabled
     meson compile -C "$BUILD/harfbuzz" -j "$JOBS"
     meson_install "$BUILD/harfbuzz"

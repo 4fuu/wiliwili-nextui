@@ -1,10 +1,13 @@
 #!/bin/sh
 # WiliWili for NextUI (tg5040 / TrimUI Brick Pro)
 #
-# Runs the bundled binary with the pak's own libraries, keeps the device awake
-# while it runs, and returns to the NextUI desktop when it exits. HOME handling
-# is left to NextUI's system overlay: this pak does not declare the "overlay"
-# capability, so the desktop's HOME panel owns exit/resume.
+# Runs the bundled binary with the pak's own libraries and returns to the
+# NextUI desktop when it exits. HOME handling is left to NextUI's system
+# overlay: this pak does not declare the "overlay" capability, so the desktop's
+# HOME panel owns exit/resume.
+#
+# No sleep integration is needed: NextUI only runs its idle-sleep loop in the
+# desktop process, and that process exits while an app is in the foreground.
 
 PAK_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd) || exit 1
 PAK_NAME=$(basename "$PAK_DIR")
@@ -56,14 +59,6 @@ fi
 export CURL_CA_BUNDLE="$CA_BUNDLE"
 export SSL_CERT_FILE="$CA_BUNDLE"
 echo "ca bundle: $CA_BUNDLE"
-
-cleanup() {
-    rm -f /tmp/stay_awake
-}
-trap cleanup EXIT INT TERM HUP QUIT
-
-# NextUI keeps the panel awake while this file exists.
-echo 1 >/tmp/stay_awake
 
 echo "starting: $PAK_DIR/bin/wiliwili $*"
 "$PAK_DIR/bin/wiliwili" "$@"
