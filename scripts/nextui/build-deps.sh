@@ -195,7 +195,15 @@ build_mpv() {
         -Dlibplacebo=disabled -Dlibplacebo-next=disabled \
         -Dwayland=disabled -Dx11=disabled -Ddrm=disabled -Dgbm=disabled \
         -Dvaapi=disabled -Dvdpau=disabled -Dcuda-hwaccel=disabled -Dcuda-interop=disabled \
-        -Dvideotoolbox=disabled -Dmacos-cocoa-cb=disabled -Drpi=disabled -Duwp=disabled \
+        -Dvideotoolbox-gl=disabled -Dmacos-cocoa-cb=disabled -Drpi=disabled -Duwp=disabled \
+        -Dios-gl=disabled -Drpi-mmal=disabled -Dcocoa=disabled -Dcoreaudio=disabled \
+        -Daudiounit=disabled -Dopensles=disabled -Dandroid-media-ndk=disabled \
+        -Dwasapi=disabled -Dxv=disabled -Dd3d11=disabled -Ddirect3d=disabled \
+        -Dgl-cocoa=disabled -Dgl-win32=disabled -Dgl-x11=disabled -Dcplugins=disabled \
+        -Dlibavdevice=disabled -Ddmabuf-wayland=disabled -Dvulkan-interop=disabled \
+        -Degl-drm=disabled -Degl-wayland=disabled -Degl-x11=disabled \
+        -Dvaapi-drm=disabled -Dvaapi-wayland=disabled -Dvaapi-x11=disabled -Dvaapi-x-egl=disabled \
+        -Dvdpau-gl-x11=disabled \
         -Dalsa=enabled -Dpulse=disabled -Dpipewire=disabled -Djack=disabled -Dopenal=disabled \
         -Dsdl2=enabled -Dsdl2-audio=enabled -Dsdl2-video=disabled -Dsdl2-gamepad=disabled \
         -Duchardet=disabled -Dzimg=disabled -Drubberband=disabled -Dlcms2=disabled -Djpeg=disabled \
