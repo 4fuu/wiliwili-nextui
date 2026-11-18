@@ -21,9 +21,14 @@ LOGS_PATH=${LOGS_PATH:-$USERDATA_PATH/logs}
 mkdir -p "$LOGS_PATH" "$SHARED_USERDATA_PATH/wiliwili" 2>/dev/null
 
 # Everything the app prints goes to the NextUI log folder; the desktop never
-# sees it on the console.
+# sees it on the console. Fall back to /dev/null so the script also works when
+# it is started by hand outside NextUI.
 LOG_FILE="$LOGS_PATH/$PAK_NAME.txt"
-rm -f "$LOG_FILE"
+# A redirection error on a special builtin is fatal in ash/dash, so probe in a
+# subshell; /dev/null keeps a hand-run launch.sh usable outside NextUI.
+if ! ( : >"$LOG_FILE" ) 2>/dev/null; then
+    LOG_FILE=/dev/null
+fi
 exec >>"$LOG_FILE" 2>&1
 
 echo "=== $PAK_NAME $(date) ==="
