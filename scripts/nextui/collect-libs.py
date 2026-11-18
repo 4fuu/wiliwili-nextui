@@ -70,6 +70,7 @@ def main():
     parser.add_argument("--dest", required=True)
     parser.add_argument("--allowlist", help="extra allowlist file (device-provided sonames)")
     parser.add_argument("--readelf", default="readelf")
+    parser.add_argument("--search-dir", action="append", default=[])
     parser.add_argument("elf", nargs="+")
     args = parser.parse_args()
 
@@ -78,8 +79,9 @@ def main():
         with open(args.allowlist, encoding="utf-8") as handle:
             allow += [line.strip() for line in handle if line.strip() and not line.startswith("#")]
 
-    search_dirs = [
+    search_dirs = list(args.search_dir) + [
         os.path.join(args.sysroot, "usr", "lib"),
+        os.path.join(args.sysroot, "usr", "lib", "aarch64-linux-gnu"),
         os.path.join(args.sysroot, "lib"),
     ]
 
@@ -96,14 +98,17 @@ def main():
             seen.add(soname)
             if any(marker in soname for marker in allow):
                 continue
+            target = os.path.join(args.dest, soname)
+            if os.path.exists(target):
+                # Already staged (libstdc++/libgcc are copied before the walk).
+                queue.append(target)
+                continue
             source = resolve(soname, search_dirs)
             if source is None:
                 sys.exit(f"collect-libs: {soname} (needed by {current}) not found in {search_dirs}")
-            target = os.path.join(args.dest, soname)
-            if not os.path.exists(target):
-                shutil.copy2(source, target)
-                os.chmod(target, 0o755)
-                copied[soname] = source
+            shutil.copy2(source, target)
+            os.chmod(target, 0o755)
+            copied[soname] = source
             queue.append(target)
 
     for soname in sorted(copied):
