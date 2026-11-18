@@ -31,7 +31,7 @@
                     id="video_detail_info_box"
                     wireframe="false"
                     width="100%"
-                    height="177"
+                    height="auto"
                     axis="column">
 
                 <brls:Box
@@ -52,15 +52,16 @@
 
 
                 <brls:Box
-                        id="video_detail_info_box"
+                        id="video/info/row"
                         wireframe="false"
                         width="100%"
                         height="auto">
                     <brls:Box
+                            id="video/info/user"
                             wireframe="false"
-                            width="60%"
-                            height="100%"
-                            maxHeight="100"
+                            width="auto"
+                            grow="1"
+                            height="100"
                             alignItems="flexStart"
                             axis="column"
                             justifyContent="center">
@@ -74,11 +75,12 @@
                     </brls:Box>
 
                     <brls:Box
+                            id="video/action/box"
                             wireframe="false"
-                            width="40%"
-                            marginLeft="@style/brls/highlight/shadow_offset"
+                            width="232"
+                            height="auto"
+                            marginLeft="8"
                             justifyContent="spaceEvenly"
-                            marginBottom="20"
                             alignItems="center">
                         <brls:Box
                                 highlightCornerRadius="50"
@@ -87,6 +89,8 @@
                                 axis="column"
                                 alignItems="center"
                                 wireframe="false"
+                                width="56"
+                                height="auto"
                                 focusable="true">
                             <SVGImage
                                     id="video/btn/agree"
@@ -94,13 +98,12 @@
                                     height="48"/>
                             <brls:Label
                                     id="video/label/agree"
-                                    positionType="absolute"
-                                    positionBottom="-30"
-                                    culled="false"
-                                    width="120"
+                                    width="100%"
+                                    height="auto"
+                                    marginTop="2"
                                     horizontalAlign="center"
                                     textColor="@theme/font/grey"
-                                    fontSize="16"
+                                    fontSize="14"
                                     wireframe="false"
                                     text="0"/>
                         </brls:Box>
@@ -112,7 +115,7 @@
                                 axis="column"
                                 alignItems="center"
                                 width="56"
-                                height="56"
+                                height="auto"
                                 focusable="true">
                             <SVGImage
                                     id="video/btn/coin"
@@ -121,13 +124,12 @@
                                     height="40"/>
                             <brls:Label
                                     id="video/label/coin"
-                                    positionType="absolute"
-                                    positionBottom="-30"
-                                    culled="false"
-                                    width="120"
+                                    width="100%"
+                                    height="auto"
+                                    marginTop="2"
                                     horizontalAlign="center"
                                     textColor="@theme/font/grey"
-                                    fontSize="16"
+                                    fontSize="14"
                                     wireframe="false"
                                     text="0"/>
                         </brls:Box>
@@ -137,7 +139,7 @@
                                 cornerRadius="50"
                                 padding="4"
                                 width="56"
-                                height="56"
+                                height="auto"
                                 axis="column"
                                 alignItems="center"
                                 focusable="true">
@@ -148,13 +150,12 @@
                                     height="40"/>
                             <brls:Label
                                     id="video/label/favorite"
-                                    positionType="absolute"
-                                    positionBottom="-30"
-                                    culled="false"
-                                    width="120"
+                                    width="100%"
+                                    height="auto"
+                                    marginTop="2"
                                     horizontalAlign="center"
                                     textColor="@theme/font/grey"
-                                    fontSize="16"
+                                    fontSize="14"
                                     wireframe="false"
                                     text="0"/>
                         </brls:Box>
@@ -164,7 +165,7 @@
                                 cornerRadius="50"
                                 padding="4"
                                 width="56"
-                                height="56"
+                                height="auto"
                                 axis="column"
                                 alignItems="center"
                                 focusable="true">
@@ -176,13 +177,12 @@
                                     SVG="@res/svg/bpx-svg-sprite-share.svg"/>
                             <brls:Label
                                     id="video/label/qr"
-                                    positionType="absolute"
-                                    positionBottom="-30"
-                                    culled="false"
-                                    width="120"
+                                    width="100%"
+                                    height="auto"
+                                    marginTop="2"
                                     horizontalAlign="center"
                                     textColor="@theme/font/grey"
-                                    fontSize="16"
+                                    fontSize="14"
                                     wireframe="false"
                                     text="0"/>
                         </brls:Box>
