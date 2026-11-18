@@ -142,7 +142,7 @@ build_libass() {
     # of /etc/fonts expectations.
     meson_setup "$BUILD/libass" "$SRC/libass-$LIBASS_VERSION" \
         -Dfontconfig=disabled -Drequire-system-font-provider=false \
-        -Dharfbuzz=enabled -Dfribidi=enabled -Dasm=enabled \
+        -Dasm=enabled \
         -Dtest=disabled -Dcompare=disabled -Dprofile=disabled -Dfuzz=disabled -Dcheckasm=disabled
     meson compile -C "$BUILD/libass" -j "$JOBS"
     meson_install "$BUILD/libass"
