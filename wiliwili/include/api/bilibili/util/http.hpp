@@ -80,6 +80,11 @@ public:
 
     static std::string getEncodedCookie(const cpr::Cookies& cookies);
 
+    // 设备上没有 /etc/ssl，libcurl 的编译期 CA 路径不可用，且本仓库的静态
+    // libcurl 不读取 CURL_CA_BUNDLE。这里显式解析一个可读的 CA bundle，
+    // 由每次请求通过 CURLOPT_CAINFO 传给 libcurl。
+    static void setCaBundle(CURL* curl);
+
     static std::shared_ptr<cpr::Session> createSession() {
         auto session = std::make_shared<cpr::Session>();
         CURL* curl = session->GetCurlHolder()->handle;
@@ -90,6 +95,7 @@ public:
         session->SetHeader(bilibili::HTTP::HEADERS);
         session->SetProxies(bilibili::HTTP::PROXIES);
         session->SetVerifySsl(bilibili::HTTP::VERIFY);
+        setCaBundle(curl);
         return session;
     }
 

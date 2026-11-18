@@ -14,12 +14,12 @@ The only community material consulted was the build *approach*; every binary in
 
 | Area | Status |
 |---|---|
-| UI | GLES3 via SDL2 + nanovg, 1024x768 native layout |
+| UI | GLES3 via SDL2 + nanovg, 1024x768 panel; UI scale defaults to 480p (1.2x) and can be raised to 400p (1.44x) |
 | Video | libmpv render API (`vo=gpu`) with FFmpeg **software** decode |
 | Audio | ALSA (mpv `ao=alsa`, SDL audio as fallback) |
-| Input | SDL GameController; the device's `js0` reports "Xbox 360 Controller" |
+| Input | SDL GameController; the device's `js0` reports "Xbox 360 Controller", remapped to the Switch-labelled buttons by default |
 | Login | QR code login (Bilibili app scan) |
-| HTTPS | system CA bundle at `/mnt/SDCARD/.system/res/ca-bundle.crt`, bundled fallback |
+| HTTPS | explicit CA bundle for libcurl (`CURLOPT_CAINFO`) and mpv/FFmpeg (`tls-ca-file`) from `CURL_CA_BUNDLE`/`SSL_CERT_FILE`, then `/mnt/SDCARD/.system/res/ca-bundle.crt`, then the pak's `res/ca-bundle.crt` |
 | Exit | returns to the NextUI desktop; HOME is owned by NextUI's system overlay |
 | Sleep | none needed: the desktop's idle-sleep loop does not run while an app is foregrounded |
 | Config | `$SHARED_USERDATA_PATH/wiliwili/wiliwili_config.json` |
@@ -65,8 +65,22 @@ exit.
 | L / R | previous / next tab |
 | Start | context menu where available |
 
-If the physical A/B labels feel inverted, enable **A-B swap** in
-Settings → Playback/Interface (`APP_SWAP_ABXY`).
+The device reports itself as an Xbox controller, but the shell uses Nintendo
+labels (south is B, east is A). NextUI exposes only an input *prompt style*
+(`INPUT_STYLE_*`), not a button mapping, so **Swap AB/XY** in Settings → Interface
+is enabled by default for tg5040 and swaps the raw SDL buttons: A confirms and
+B goes back as printed on the shell, while the on-screen hints keep the same
+letters. Turn it off if you use an Xbox-layout pad. This mapping belongs to
+wiliwili only: a Moonlight pak must keep passing the raw Xbox layout to its
+host, which expects Xbox, and is not affected by this setting.
+
+## UI scale
+
+The UI canvas is 1024x768 at 1.0x, which is too dense on the 3.2-inch panel.
+The scale setting now applies on tg5040 too: **480p** (854x480 canvas, 1.2x) is
+the default and **400p** (712x400, 1.44x) is the largest option. The SDL window
+stays at the full 1024x768 panel size; only the logical canvas changes, and the
+setting requires a relaunch (the app exits to the NextUI desktop on change).
 
 ## Build
 
@@ -202,6 +216,12 @@ The log is at `$LOGS_PATH/WiliWili.txt`
 - `sdl: GL Vendor/Renderer/Version` — should report PowerVR GE8300 / OpenGL ES 3.x
 - `MPV Version` / `FFMPEG Version`
 - `ca bundle: ...` — which bundle was selected
+- `CA bundle from environment: ...` — the path libcurl and mpv were given
+  explicitly. If you instead see `No CA bundle found`, neither
+  `CURL_CA_BUNDLE`/`SSL_CERT_FILE` nor the pak fallback was readable.
+  `SSL certificate problem: unable to get local issuer certificate` means the
+  selected file did not contain the issuer chain; point `CURL_CA_BUNDLE` at a
+  complete Mozilla bundle.
 
 If the UI renders but video is black, try a build with `MPV_NO_FB=1` before
 chasing anything else; that isolates the FBO path from the GL context.

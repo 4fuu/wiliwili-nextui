@@ -4,7 +4,15 @@
 
 #include "bilibili/util/http.hpp"
 
+#include "utils/ca_bundle.hpp"
+
 namespace bilibili {
+
+void HTTP::setCaBundle(CURL* curl) {
+    const std::string& path = wiliwili::getCaBundlePath();
+    if (path.empty()) return;
+    curl_easy_setopt(curl, CURLOPT_CAINFO, path.c_str());
+}
 
 std::string HTTP::getEncodedCookie(const cpr::Cookies& cookies) {
     std::stringstream stream;

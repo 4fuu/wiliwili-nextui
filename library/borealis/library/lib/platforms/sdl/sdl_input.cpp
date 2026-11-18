@@ -19,6 +19,8 @@
 #include <borealis/core/logger.hpp>
 #include <borealis/platforms/sdl/sdl_input.hpp>
 
+#include <utility>
+
 namespace brls
 {
 
@@ -518,6 +520,15 @@ void SDLInputManager::updateControllerState(ControllerState* state, int controll
         // Translate SDL gamepad to borealis controller
         size_t brlsButton          = SDL_BUTTONS_MAPPING[i];
         state->buttons[brlsButton] = (bool)SDL_GameControllerGetButton(c, (SDL_GameControllerButton)i);
+    }
+
+    // Some handhelds (TrimUI Brick, Switch-style pads) report an Xbox
+    // controller name while their face buttons are Nintendo-labelled. Swap
+    // the raw buttons so the logical A/B/X/Y labels keep matching the shell.
+    if (Application::isNintendoLayout())
+    {
+        std::swap(state->buttons[BUTTON_A], state->buttons[BUTTON_B]);
+        std::swap(state->buttons[BUTTON_X], state->buttons[BUTTON_Y]);
     }
 
     state->buttons[BUTTON_LT] = SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_TRIGGERLEFT) > 3276.7f;

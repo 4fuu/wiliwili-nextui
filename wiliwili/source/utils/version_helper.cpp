@@ -13,6 +13,7 @@
 #include <borealis/platforms/desktop/steam_deck.hpp>
 
 #include "utils/config_helper.hpp"
+#include "utils/ca_bundle.hpp"
 #include "utils/dialog_helper.hpp"
 #include "api/bilibili/util/http.hpp"
 #include "fragment/latest_update.hpp"
@@ -94,6 +95,8 @@ void APPVersion::checkUpdate(int delay, bool showUpToDateDialog) {
         std::string url =
             ProgramConfig::instance().getSettingItem(SettingItem::CUSTOM_UPDATE_API, APPVersion::RELEASE_API);
 
+        cpr::SslOptions ssl;
+        ssl.ca_info = wiliwili::getCaBundlePath();
         cpr::GetCallback(
             [showUpToDateDialog](cpr::Response r) {
                 checking_update = false;
@@ -137,6 +140,6 @@ void APPVersion::checkUpdate(int delay, bool showUpToDateDialog) {
                     brls::Logger::error("check update failed: {} {} {}", r.status_code, r.text.c_str(), e.what());
                 }
             },
-            bilibili::HTTP::VERIFY, bilibili::HTTP::PROXIES, cpr::Url{url}, cpr::Timeout{10000});
+            bilibili::HTTP::VERIFY, bilibili::HTTP::PROXIES, cpr::Url{url}, cpr::Timeout{10000}, ssl);
     });
 }

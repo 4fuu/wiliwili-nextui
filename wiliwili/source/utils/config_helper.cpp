@@ -91,8 +91,8 @@ unsigned int sceLibcHeapSize             = 24 * 1024 * 1024;
 #endif
 #define WILI_WINDOW_WIDTH_DEFAULT 960
 #define WILI_WINDOW_HEIGHT_DEFAULT 544
-// 默认 UI 缩放 (0 为 960x544)
-#define WILI_UI_SCALE_DEFAULT 0
+// 默认 UI 缩放，索引见 APP_UI_SCALE 的选项列表 (2 为 960x544)
+#define WILI_UI_SCALE_DEFAULT 2
 // 默认音频质量 (4 为 低, PSV 的喇叭质量差，音质高低无区别，设置成低可以减少流量)
 #define WILI_AUDIO_QUALITY_DEFAULT 4
 #define WILI_DNS_CACHE_TIMEOUT 3600000
@@ -106,7 +106,9 @@ unsigned int sceLibcHeapSize             = 24 * 1024 * 1024;
 #define WILI_VIDEO_QUALITY_PORTRAIT_MAX 32
 #define WILI_WINDOW_WIDTH_DEFAULT 1024
 #define WILI_WINDOW_HEIGHT_DEFAULT 768
-// 默认 UI 缩放 (1 为 720p)；tg5040 在初始化时强制使用面板分辨率
+// 默认 UI 缩放：1 为 854x480 画布，在 1024x768 面板上相当于 1.2 倍。
+// 400p（1.44 倍）是最大档，可在设置中切换；再大首页网格和播放页会挤。
+// tg5040 的 1024x768 面板只有 3.2 英寸，按 1024 逻辑宽度排版太小。
 #define WILI_UI_SCALE_DEFAULT 1
 // 默认音频质量 (2 为 高)：音频解码开销很低，无需为省流量降级
 #define WILI_AUDIO_QUALITY_DEFAULT 2
@@ -121,12 +123,22 @@ unsigned int sceLibcHeapSize             = 24 * 1024 * 1024;
 // 默认窗口大小 (不配置 ui 缩放时的窗口大小)
 #define WILI_WINDOW_WIDTH_DEFAULT 1280
 #define WILI_WINDOW_HEIGHT_DEFAULT 720
-// 默认 UI 缩放 (1 为 1280x720)
-#define WILI_UI_SCALE_DEFAULT 1
+// 默认 UI 缩放，索引见 APP_UI_SCALE 的选项列表 (3 为 1280x720)
+#define WILI_UI_SCALE_DEFAULT 3
 // 默认音频质量 (2 为 高)
 #define WILI_AUDIO_QUALITY_DEFAULT 2
 // DNS 缓存时间
 #define WILI_DNS_CACHE_TIMEOUT 60000
+#endif
+
+// tg5040 的 js0 以 Xbox 名称上报，但 Brick 系列面板上的实体按键是
+// Nintendo 布局（南侧为 B、东侧为 A）。默认交换 A/B 与 X/Y，让确认/返回
+// 与机身丝印一致；设置页仍可关闭。这只影响 wiliwili 自身，不影响 Moonlight
+// 等把 Xbox 布局直接转给主机的串流应用。
+#ifdef NEXTUI_TG5040
+#define WILI_SWAP_ABXY_DEFAULT 1
+#else
+#define WILI_SWAP_ABXY_DEFAULT 0
 #endif
 
 using namespace brls::literals;
@@ -156,7 +168,8 @@ std::unordered_map<SettingItem, ProgramOption> ProgramConfig::SETTING_MAP = {
 #endif
     {SettingItem::APP_THEME, {"app_theme", {"auto", "light", "dark"}, {}, 0}},
     {SettingItem::APP_RESOURCES, {"app_resources", {}, {}, 0}},
-    {SettingItem::APP_UI_SCALE, {"app_ui_scale", {"544p", "720p", "900p", "1080p"}, {}, WILI_UI_SCALE_DEFAULT}},
+    {SettingItem::APP_UI_SCALE,
+     {"app_ui_scale", {"400p", "480p", "544p", "720p", "900p", "1080p"}, {}, WILI_UI_SCALE_DEFAULT}},
     {SettingItem::KEYMAP, {"keymap", {"xbox", "ps", "keyboard"}, {}, 0}},
     {SettingItem::HOME_WINDOW_STATE, {"home_window_state", {}, {}, 0}},
     {SettingItem::DLNA_IP, {"dlna_ip", {}, {}, 0}},
@@ -185,7 +198,7 @@ std::unordered_map<SettingItem, ProgramOption> ProgramConfig::SETTING_MAP = {
     {SettingItem::SHORTCUT_VIDEO_PAUSE, {"shortcut_video_pause", {}, {}, 0}},
 
     /// bool
-    {SettingItem::APP_SWAP_ABXY, {"app_swap_abxy", {}, {}, 0}},
+    {SettingItem::APP_SWAP_ABXY, {"app_swap_abxy", {}, {}, WILI_SWAP_ABXY_DEFAULT}},
     {SettingItem::GAMEPAD_VIBRATION, {"gamepad_vibration", {}, {}, 1}},
 #if defined(IOS) || defined(__PSV__)
     {SettingItem::HIDE_BOTTOM_BAR, {"hide_bottom_bar", {}, {}, 1}},
@@ -550,15 +563,17 @@ void ProgramConfig::load() {
     }
 
     // 初始化 UI 缩放
-    std::string UIScale = getSettingItem(SettingItem::APP_UI_SCALE, std::string{""});
-#ifdef NEXTUI_TG5040
-    // tg5040 只有一块 1024x768 屏幕：按面板原生分辨率布局，避免把 16:9
-    // 画布缩小后再出现上下黑边。设置里的 UI 缩放对该平台不再生效。
-    (void)UIScale;
-    brls::Application::ORIGINAL_WINDOW_WIDTH  = WILI_WINDOW_WIDTH_DEFAULT;
-    brls::Application::ORIGINAL_WINDOW_HEIGHT = WILI_WINDOW_HEIGHT_DEFAULT;
-#else
-    if (UIScale == "544p") {
+    // 未写入配置时使用选项表里的默认值，否则 tg5040 会退回面板原生
+    // 1024x768 画布，用户看到的仍是 1.0 倍的小界面。
+    auto scaleOption    = getOptionData(SettingItem::APP_UI_SCALE);
+    std::string UIScale = getSettingItem(SettingItem::APP_UI_SCALE, scaleOption.optionList[scaleOption.defaultOption]);
+    if (UIScale == "400p") {
+        brls::Application::ORIGINAL_WINDOW_WIDTH  = 712;
+        brls::Application::ORIGINAL_WINDOW_HEIGHT = 400;
+    } else if (UIScale == "480p") {
+        brls::Application::ORIGINAL_WINDOW_WIDTH  = 854;
+        brls::Application::ORIGINAL_WINDOW_HEIGHT = 480;
+    } else if (UIScale == "544p") {
         brls::Application::ORIGINAL_WINDOW_WIDTH  = 960;
         brls::Application::ORIGINAL_WINDOW_HEIGHT = 544;
     } else if (UIScale == "720p") {
@@ -574,7 +589,8 @@ void ProgramConfig::load() {
         brls::Application::ORIGINAL_WINDOW_WIDTH  = WILI_WINDOW_WIDTH_DEFAULT;
         brls::Application::ORIGINAL_WINDOW_HEIGHT = WILI_WINDOW_HEIGHT_DEFAULT;
     }
-#endif
+    brls::Logger::info("UI scale: {} ({}x{})", UIScale, brls::Application::ORIGINAL_WINDOW_WIDTH,
+                       brls::Application::ORIGINAL_WINDOW_HEIGHT);
 
     // 初始化视频清晰度最高限制
     VideoDetail::landscapeQualityMax = getSettingItem(SettingItem::VIDEO_QUALITY_LANDSCAPE_MAX,
@@ -718,6 +734,12 @@ void ProgramConfig::load() {
 #elif defined(__APPLE__) || defined(__linux__) || defined(_WIN32)
     // 初始化上一次窗口位置
     loadHomeWindowState();
+#ifdef NEXTUI_TG5040
+    // tg5040 只有一块 1024x768 屏幕：SDL 窗口固定为面板尺寸，UI 缩放只改变
+    // 逻辑画布 (ORIGINAL_WINDOW_*)，不会让应用缩成一个小窗口。
+    VideoContext::sizeW = WILI_WINDOW_WIDTH_DEFAULT;
+    VideoContext::sizeH = WILI_WINDOW_HEIGHT_DEFAULT;
+#endif
 #endif
 
     // 初始化FPS限制
@@ -773,11 +795,17 @@ void ProgramConfig::load() {
     // 初始化一些在创建窗口之后才能初始化的内容
     brls::Application::getWindowCreationDoneEvent()->subscribe([this]() {
         // 是否交换按键
+#ifdef NEXTUI_TG5040
+        // 设备以 Xbox 名称上报，但实体丝印是 Nintendo 布局：在输入层交换
+        // A/B 与 X/Y，逻辑按键名保持不变，屏幕提示仍然显示机身丝印。
+        brls::Application::setNintendoLayout(getBoolOption(SettingItem::APP_SWAP_ABXY));
+#else
         if (getBoolOption(SettingItem::APP_SWAP_ABXY)) {
             // 对于 PSV/PS4 来说，初始化时会加载系统设置，可能在那时已经交换过按键
             // 所以这里需要读取 isSwapInputKeys 的值，而不是直接设置为 true
             brls::Application::setSwapInputKeys(!brls::Application::isSwapInputKeys());
         }
+#endif
 
         // 初始化弹幕字体
         std::string danmakuFont = getConfigDir() + "/danmaku.ttf";
@@ -1108,11 +1136,16 @@ void ProgramConfig::init() {
             brls::FontLoader::USER_ICON_PATH = BRLS_ASSET("font/keymap_ps.ttf");
         } else {
             brls::Application::setHintsLiteMode(true);
+#ifdef NEXTUI_TG5040
+            // tg5040 的交换发生在输入层，逻辑按键名未变，图标无需交换
+            brls::FontLoader::USER_ICON_PATH = BRLS_ASSET("font/keymap_keyboard.ttf");
+#else
             if (getBoolOption(SettingItem::APP_SWAP_ABXY)) {
                 brls::FontLoader::USER_ICON_PATH = BRLS_ASSET("font/keymap_keyboard_swap.ttf");
             } else {
                 brls::FontLoader::USER_ICON_PATH = BRLS_ASSET("font/keymap_keyboard.ttf");
             }
+#endif
         }
 #endif
     }

@@ -12,6 +12,7 @@
 #include "utils/config_helper.hpp"
 #include "utils/number_helper.hpp"
 #include "utils/crash_helper.hpp"
+#include "utils/ca_bundle.hpp"
 #include "view/mpv_core.hpp"
 
 #ifdef MPV_BUNDLE_DLL
@@ -318,6 +319,15 @@ void MPVCore::init() {
     mpvSetOptionString(mpv, "reset-on-next-file", "speed,pause");
     mpvSetOptionString(mpv, "vo", "libmpv");
     mpvSetOptionString(mpv, "pulse-latency-hacks", "no");
+
+    // FFmpeg's OpenSSL backend only loads a CA file when one is given, so pass
+    // the same bundle the HTTP client uses; without it HTTPS playback fails on
+    // images that ship no /etc/ssl.
+    const std::string& caBundle = wiliwili::getCaBundlePath();
+    if (!caBundle.empty()) {
+        mpvSetOptionString(mpv, "tls-ca-file", caBundle.c_str());
+        brls::Logger::info("MPV TLS CA file: {}", caBundle);
+    }
 
     mpvSetOption(mpv, "brightness", MPV_FORMAT_DOUBLE, &MPVCore::VIDEO_BRIGHTNESS);
     mpvSetOption(mpv, "contrast", MPV_FORMAT_DOUBLE, &MPVCore::VIDEO_CONTRAST);

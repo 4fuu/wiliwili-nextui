@@ -202,6 +202,15 @@ void Register::initCustomStyle() {
     // Add custom values to the style
     brls::getStyle().addMetric("brls/animations/highlight", 200);
     brls::getStyle().addMetric("wiliwili/window/width", brls::Application::ORIGINAL_WINDOW_WIDTH);
+    // 大号 UI 缩放下逻辑画布会变窄，侧栏按画布宽度收缩，给设置项留出空间。
+    float sidebarWidth = brls::Application::ORIGINAL_WINDOW_WIDTH / 4.0f;
+    if (sidebarWidth < 200) sidebarWidth = 200;
+    if (sidebarWidth > 240) sidebarWidth = 240;
+    brls::getStyle().addMetric("wiliwili/setting/sidebar/width", sidebarWidth);
+    // 首页搜索框固定占位，窄画布上收窄，避免盖住最后一个顶部 Tab。
+    float homeSearchWidth = brls::Application::ORIGINAL_WINDOW_WIDTH < 800 ? 260 : 340;
+    brls::getStyle().addMetric("wiliwili/home/search/width", homeSearchWidth);
+    brls::getStyle().addMetric("wiliwili/home/search/button/width", homeSearchWidth - 40);
 
     if (brls::Application::ORIGINAL_WINDOW_HEIGHT == 544) {
         brls::getStyle().addMetric("wiliwili/grid/span/5", 4);
@@ -242,8 +251,12 @@ void Register::initCustomStyle() {
                 brls::getStyle().addMetric("wiliwili/grid/span/3", 3);
                 brls::getStyle().addMetric("wiliwili/grid/span/2", 2);
         }
-        brls::getStyle().addMetric("wiliwili/player/width", brls::Application::ORIGINAL_WINDOW_WIDTH - 480);
-        brls::getStyle().addMetric("wiliwili/player/bottom/font", 13);
+        float playerWidth = brls::Application::ORIGINAL_WINDOW_WIDTH - 480;
+        if (playerWidth < brls::Application::ORIGINAL_WINDOW_WIDTH * 0.5f)
+            playerWidth = brls::Application::ORIGINAL_WINDOW_WIDTH * 0.5f;
+        brls::getStyle().addMetric("wiliwili/player/width", playerWidth);
+        brls::getStyle().addMetric("wiliwili/player/bottom/font",
+                                   brls::Application::ORIGINAL_WINDOW_WIDTH < 800 ? 11 : 13);
         brls::getStyle().addMetric("wiliwili/comment/level/x", 45);
         brls::getStyle().addMetric("wiliwili/margin/20", 20);
         brls::getStyle().addMetric("wiliwili/about/qr", 200);

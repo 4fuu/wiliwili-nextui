@@ -331,6 +331,22 @@ class Application
         return swapInputKeys;
     }
 
+    /**
+     * Swap the physical A/B and X/Y buttons at the platform input layer.
+     * Unlike setSwapInputKeys(), this leaves the logical button labels (and
+     * therefore the on-screen hints) unchanged, which is what a Nintendo
+     * layout needs when the pad identifies itself as an Xbox controller.
+     */
+    inline static void setNintendoLayout(bool value)
+    {
+        nintendoLayout = value;
+    }
+
+    inline static bool isNintendoLayout()
+    {
+        return nintendoLayout;
+    }
+
     inline static void setDrawCoursor(bool draw)
     {
         drawCoursor = draw;
@@ -363,6 +379,7 @@ class Application
     inline static bool quitRequested        = false;
     inline static bool debuggingViewEnabled = false;
     inline static bool swapInputKeys        = false;
+    inline static bool nintendoLayout       = false;
     inline static bool drawCoursor          = false;
 
     inline static Platform* platform = nullptr;
