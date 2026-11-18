@@ -17,10 +17,13 @@ Prepare:
 1. Start **WiliWili** from Tools.
 2. Expect: no black screen, the home page at 1024x768 with the full width used
    (not a centered 16:9 letterbox), readable CJK text (headlines, titles and the
-   bottom hint bar), and the controller icon set matching the device.
+   bottom hint bar), and the controller icon set matching the device. The
+   default UI scale is 480p; try 400p in Settings → Interface for larger text.
 3. The log must show `sdl: GL Renderer: PowerVR Rogue GE8300` and
    `OpenGL ES 3.x`, plus `MPV Version`/`FFMPEG Version` lines.
-4. `grep "ca bundle" "$LOG"` reports the system bundle, not the fallback.
+4. `grep "ca bundle" "$LOG"` reports the system bundle, not the fallback, and
+   `grep "CA bundle" "$LOG"` reports `CA bundle from environment:` on the first
+   network request. No `SSL certificate problem` may appear in the log.
 
 ## 2. Login
 
@@ -31,10 +34,13 @@ Prepare:
 
 ## 3. Navigation and input
 
-8. D-pad and left stick move the focus; A activates; B goes back.
+8. D-pad and left stick move the focus; A activates; B goes back. The default
+   **Swap AB/XY** setting matches the shell labels (east is A, south is B) and
+   the bottom hint bar must show `A` for confirm and `B` for back.
 9. Open a video detail page, move through tabs with L/R.
-10. If the physical A/B labels feel inverted, enable A-B swap in settings and
-    confirm the change takes effect.
+10. Turn **Swap AB/XY** off, relaunch, and confirm the mapping returns to raw
+    Xbox order; turn it back on. (Moonlight and other paks are unaffected by
+    this wiliwili setting.)
 11. There is no on-screen keyboard: the search box and comment input are
     expected to be unusable. Record what happens (dialog opens but cannot be
     typed into) so it can be documented as a known limit.

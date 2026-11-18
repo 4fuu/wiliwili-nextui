@@ -481,6 +481,8 @@ void SettingActivity::onContentAvailable() {
     static int UIScaleIndex = conf.getStringOptionIndex(SettingItem::APP_UI_SCALE);
     selectorUIScale->init("wiliwili/setting/app/others/scale/header"_i18n,
                           {
+                              "wiliwili/setting/app/others/scale/400p"_i18n,
+                              "wiliwili/setting/app/others/scale/480p"_i18n,
                               "wiliwili/setting/app/others/scale/544p"_i18n,
                               "wiliwili/setting/app/others/scale/720p"_i18n,
                               "wiliwili/setting/app/others/scale/900p"_i18n,

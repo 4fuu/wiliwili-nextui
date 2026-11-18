@@ -78,6 +78,8 @@
         },
         "scale": {
           "header": "Scala UI (riavvio richiesto)",
+          "400p": "400p",
+          "480p": "480p",
           "544p": "544p",
           "720p": "720p",
           "900p": "900p",
