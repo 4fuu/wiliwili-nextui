@@ -1,0 +1,110 @@
+name: NextUI tg5040
+
+# Cross-builds wiliwili for NextUI on the TrimUI Brick Pro (tg5040) inside the
+# NextUI toolchain container. Produces a complete WiliWili.pakz artifact:
+# aarch64 binary, GLES3 UI, libmpv/FFmpeg software decode (no nonfree code).
+#
+# The host orb has no Docker, so this workflow is the authoritative aarch64
+# build. The recipe is the same one a Docker host runs locally:
+#   make -f ... (see NEXTUI.md)
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '**.md'
+  pull_request:
+    paths-ignore:
+      - '**.md'
+  workflow_dispatch:
+    inputs:
+      mpv_no_fb:
+        description: 'Build the MPV_NO_FB render path (FBO path is the default)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: nextui-tg5040-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build WiliWili.pakz
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    container:
+      image: ghcr.io/loveretro/tg5040-toolchain:latest
+    env:
+      JOBS: 4
+      MPV_NO_FB: ${{ github.event.inputs.mpv_no_fb == 'true' && '1' || '0' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install build tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends meson zip file
+
+      - name: Show toolchain
+        run: |
+          echo "CROSS_TRIPLE=$CROSS_TRIPLE"
+          echo "SYSROOT=$SYSROOT"
+          ${CROSS_TRIPLE}-gcc --version | head -1
+          meson --version
+          pkg-config --modversion sdl2 glesv2 alsa
+
+      - name: Cache dependency sources
+        uses: actions/cache@v4
+        with:
+          path: .nextui-build/src
+          key: nextui-deps-src-${{ hashFiles('scripts/nextui/build-deps.sh') }}
+
+      - name: Build dependencies (FFmpeg, libmpv, libass)
+        run: ./scripts/nextui/build-deps.sh
+
+      - name: Build wiliwili
+        run: ./scripts/nextui/build-wiliwili.sh
+
+      - name: Package pak
+        run: ./scripts/nextui/make-pak.sh
+
+      - name: Build summary
+        run: |
+          {
+            echo "### NextUI tg5040 build"
+            echo
+            echo "- mpv: $(pkg-config --modversion mpv)"
+            echo "- libass: $(pkg-config --modversion libass)"
+            echo "- libavcodec: $(pkg-config --modversion libavcodec)"
+            echo "- SDL2 (device-provided): $(pkg-config --modversion sdl2)"
+            echo "- pakz size: $(du -h dist/WiliWili.pakz | cut -f1)"
+            echo
+            echo "Bundled libraries:"
+            echo '```'
+            ls dist/WiliWili.pak/lib
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload pakz
+        uses: actions/upload-artifact@v4
+        with:
+          name: WiliWili-tg5040-pakz
+          path: dist/WiliWili.pakz
+          if-no-files-found: error
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: WiliWili-tg5040-logs
+          path: |
+            .nextui-build/deps/meson-logs/
+            build-nextui/CMakeCache.txt
+          if-no-files-found: ignore

@@ -96,6 +96,21 @@ unsigned int sceLibcHeapSize             = 24 * 1024 * 1024;
 // 默认音频质量 (4 为 低, PSV 的喇叭质量差，音质高低无区别，设置成低可以减少流量)
 #define WILI_AUDIO_QUALITY_DEFAULT 4
 #define WILI_DNS_CACHE_TIMEOUT 3600000
+#elif defined(NEXTUI_TG5040)
+// NextUI on tg5040 (TrimUI Brick Pro, Allwinner A133P): 1024x768 panel and
+// software video decode only. 64 is 720P and 32 is 480P; without a hardware
+// decoder 1080P (80 and above) is not playable, so both caps stay at 720P.
+// The UI is designed at the panel's native resolution (no 16:9 downscale).
+#define WILI_VIDEO_QUALITY_DEFAULT 64
+#define WILI_VIDEO_QUALITY_LANDSCAPE_MAX 64
+#define WILI_VIDEO_QUALITY_PORTRAIT_MAX 32
+#define WILI_WINDOW_WIDTH_DEFAULT 1024
+#define WILI_WINDOW_HEIGHT_DEFAULT 768
+// 默认 UI 缩放 (1 为 720p)；tg5040 在初始化时强制使用面板分辨率
+#define WILI_UI_SCALE_DEFAULT 1
+// 默认音频质量 (2 为 高)：音频解码开销很低，无需为省流量降级
+#define WILI_AUDIO_QUALITY_DEFAULT 2
+#define WILI_DNS_CACHE_TIMEOUT 60000
 #else
 // 默认清晰度 (116 为 1080P@60)
 #define WILI_VIDEO_QUALITY_DEFAULT 116
@@ -536,6 +551,13 @@ void ProgramConfig::load() {
 
     // 初始化 UI 缩放
     std::string UIScale = getSettingItem(SettingItem::APP_UI_SCALE, std::string{""});
+#ifdef NEXTUI_TG5040
+    // tg5040 只有一块 1024x768 屏幕：按面板原生分辨率布局，避免把 16:9
+    // 画布缩小后再出现上下黑边。设置里的 UI 缩放对该平台不再生效。
+    (void)UIScale;
+    brls::Application::ORIGINAL_WINDOW_WIDTH  = WILI_WINDOW_WIDTH_DEFAULT;
+    brls::Application::ORIGINAL_WINDOW_HEIGHT = WILI_WINDOW_HEIGHT_DEFAULT;
+#else
     if (UIScale == "544p") {
         brls::Application::ORIGINAL_WINDOW_WIDTH  = 960;
         brls::Application::ORIGINAL_WINDOW_HEIGHT = 544;
@@ -552,6 +574,7 @@ void ProgramConfig::load() {
         brls::Application::ORIGINAL_WINDOW_WIDTH  = WILI_WINDOW_WIDTH_DEFAULT;
         brls::Application::ORIGINAL_WINDOW_HEIGHT = WILI_WINDOW_HEIGHT_DEFAULT;
     }
+#endif
 
     // 初始化视频清晰度最高限制
     VideoDetail::landscapeQualityMax = getSettingItem(SettingItem::VIDEO_QUALITY_LANDSCAPE_MAX,

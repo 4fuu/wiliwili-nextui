@@ -1,0 +1,13 @@
+{
+  "name": "WiliWili",
+  "type": "TOOL",
+  "description": "Bilibili client (third-party, software video decode)",
+  "author": "xfangfang and contributors; NextUI port by 4fuu",
+  "repo_url": "https://github.com/4fuu/wiliwili-nextui",
+  "release_filename": "WiliWili.pakz",
+  "platforms": [
+    "tg5040"
+  ],
+  "launch": "launch.sh",
+  "version": "v1.6.0"
+}

@@ -27,6 +27,11 @@ cmake_dependent_option(INSTALL "Install to system path" OFF "UNIX;NOT APPLE" OFF
 # For Developer
 option(DEBUG_SANITIZER "Turn on sanitizers (only available in debug build)" OFF)
 
+# NextUI on tg5040 (TrimUI Brick Pro): 1024x768 panel, software video decode.
+# Selects the device's window size and caps the video quality defaults; see
+# NEXTUI.md.
+option(NEXTUI_TG5040 "Apply NextUI tg5040 device defaults" OFF)
+
 # Google Analytics
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/GoogleAnalytics.cmake)
 
@@ -163,6 +168,11 @@ list(APPEND APP_PLATFORM_OPTION
    -DBUILD_VERSION_MINOR=${VERSION_MINOR}
    -DBUILD_VERSION_REVISION=${VERSION_REVISION}
 )
+
+if (NEXTUI_TG5040)
+    message(STATUS "NextUI tg5040 device defaults enabled")
+    list(APPEND APP_PLATFORM_OPTION -DNEXTUI_TG5040)
+endif ()
 
 if (BUILTIN_NSP)
     list(APPEND APP_PLATFORM_LIB nsp)
