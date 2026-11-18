@@ -34,3 +34,8 @@ android-project
 CLAUDE.md
 # Other AI
 AGENT.md
+# NextUI tg5040 cross build output
+dist/
+.nextui-build/
+# ...but the build scripts themselves are tracked:
+!scripts/nextui/build-*.sh

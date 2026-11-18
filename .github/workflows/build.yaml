@@ -1,8 +1,10 @@
 name: Build wiliwili
 
+# Kept for manual use only. This fork maintains one pipeline, NextUI tg5040
+# (.github/workflows/nextui-tg5040.yml); the upstream matrix below (Windows,
+# Switch, macOS, flatpak, PSV, PS4) targets upstream's release setup and fails
+# on this snapshot for reasons unrelated to the NextUI port.
 on:
-  push:
-  pull_request:
   workflow_dispatch:
     inputs:
       ssh_darwin:
