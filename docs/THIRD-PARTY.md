@@ -10,7 +10,7 @@ prebuilt community binary is redistributed.
 | wiliwili | 1.6.0 | GPL-3.0-or-later | `bin/wiliwili` | yes |
 | mpv / libmpv | 0.36.0 | GPL-2.0-or-later | `lib/libmpv.so.2` | yes |
 | FFmpeg (`libav*`) | 6.1.1 | LGPL-2.1-or-later (no `--enable-gpl`, no `--enable-nonfree`) | `lib/libav*.so.*` | yes |
-| libass | 0.17.5 | ISC | `lib/libass.so.9` | yes |
+| libass | 0.17.5 | ISC | statically linked into `lib/libmpv.so.2` | yes |
 | harfbuzz | 7.3.0 | MIT | `lib/libharfbuzz.so.0` | yes |
 | fribidi | 1.0.16 | LGPL-2.1-or-later | `lib/libfribidi.so.0` | yes |
 | OpenSSL | 1.1 (vendor SDK) | OpenSSL/SSLeay (GPL-compatible) | `lib/libssl.so.1.1`, `lib/libcrypto.so.1.1` | no, SDK |

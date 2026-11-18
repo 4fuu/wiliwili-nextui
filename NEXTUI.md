@@ -100,7 +100,7 @@ Outputs:
 | GLESv2 / EGL | vendor SDK | device-provided |
 | mpv | 0.36.0 | shared `libmpv.so.2`, `cplayer` off |
 | FFmpeg | 6.1.1 | shared, software decode |
-| libass | 0.17.5 | no fontconfig (device has no system fonts) |
+| libass | 0.17.5 | static, linked into libmpv; no fontconfig |
 | harfbuzz | 7.3.0 | no FreeType/GLib/ICU |
 | fribidi | 1.0.16 | |
 | OpenSSL | 1.1 (vendor SDK) | HTTPS for libcurl and FFmpeg |
@@ -157,9 +157,9 @@ itself, so this only affects `sub-add` subtitles, which wiliwili does not use.
 `scripts/nextui/collect-libs.py` walks the ELF `NEEDED` graph of the binary and
 copies everything that is not on the device allowlist (glibc, SDL2,
 GLESv2/EGL, ALSA, zlib, FreeType, libpng). The pak currently bundles libmpv,
-FFmpeg's `libav*`, libass, harfbuzz, fribidi, OpenSSL, libstdc++ and libgcc.
-Resolution failures are fatal, so a pak cannot be published with a missing
-library.
+FFmpeg's `libav*`, harfbuzz, fribidi, OpenSSL, libstdc++ and libgcc. libass is
+built static and lives inside `libmpv.so.2`. Resolution failures are fatal, so
+a pak cannot be published with a missing library.
 
 ## Layout
 
@@ -182,6 +182,17 @@ foreground apps: the desktop process exits when a pak launches, so the idle
 sleep loop that lives in it is not running. The SDL video driver is left on
 auto-selection: the vendor driver is named `mali`, and forcing a name that a
 future image renames would abort startup.
+
+## Verification status
+
+- CI (`.github/workflows/nextui-tg5040.yml`) builds the aarch64 binary and the
+  pakz inside the NextUI toolchain image on every push; the artifact is
+  `WiliWili-tg5040-pakz`.
+- The 1024x768 layout and the bundled CJK/emoji fonts were rendered with a host
+  build using the same `NEXTUI_TG5040=ON` defaults (home page and video page).
+- Physical-device checks — GLES3 context on the PowerVR GE8300, software-decode
+  frame rate, audio, controller mapping and HOME/exit — are still pending. The
+  checklist is `docs/NEXTUI-DEVICE-TEST.md`.
 
 ## Troubleshooting
 
