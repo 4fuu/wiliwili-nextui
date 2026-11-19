@@ -62,6 +62,7 @@ exit.
 | A | confirm |
 | B | back |
 | X / Y | page actions (search, menu) as shown in the on-screen hint bar |
+| Y (player info area) | switch the info block between uploader info and like/coin/favorite/share |
 | L / R | previous / next tab |
 | Start | context menu where available |
 
@@ -81,8 +82,11 @@ The scale setting now applies on tg5040 too: **480p** (854x480 canvas, 1.2x) is
 the default and **400p** (712x400, 1.44x) is the largest option. The SDL window
 stays at the full 1024x768 panel size; only the logical canvas changes, and the
 setting requires a relaunch (the app exits to the NextUI desktop on change).
-At both large steps the player puts the UP row and the like/coin/favorite/share
-row on separate lines so the action buttons and their counts cannot overlap.
+At both large steps the player merges the UP row and the
+like/coin/favorite/share row into one region that switches between them, so the
+video keeps its height and neither state overlaps. The `UP主 ⇄ 互动` switch in
+the title row (tap or A) and **Y** in the info area flip the view; the footer
+hint bar shows the switch while that region has focus.
 
 ## Build
 

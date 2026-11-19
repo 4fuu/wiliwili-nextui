@@ -334,6 +334,9 @@
   },
   "player": {
     "intro": "Introduzione",
+    "info_up": "UP",
+    "info_action": "Azioni",
+    "info_switch": "Cambia",
     "p": "Parti",
     "ugc_season": "Playlist",
     "related": "Correlati",

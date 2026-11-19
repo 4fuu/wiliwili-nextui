@@ -38,10 +38,15 @@ Prepare:
    **Swap AB/XY** setting matches the shell labels (east is A, south is B) and
    the bottom hint bar must show `A` for confirm and `B` for back.
 9. Open a video detail page, move through tabs with L/R.
-10. Turn **Swap AB/XY** off, relaunch, and confirm the mapping returns to raw
+10. The player info block shows the uploader (avatar, name, follower count,
+    follow button). Press **Y** or tap the `UP主 ⇄ 互动` switch next to the
+    title: it must swap to like/coin/favorite/share with their counts, and
+    back. In both states at 480p and 400p nothing may overlap, and the footer
+    hint bar must offer the switch while the block is focused.
+11. Turn **Swap AB/XY** off, relaunch, and confirm the mapping returns to raw
     Xbox order; turn it back on. (Moonlight and other paks are unaffected by
     this wiliwili setting.)
-11. There is no on-screen keyboard: the search box and comment input are
+12. There is no on-screen keyboard: the search box and comment input are
     expected to be unusable. Record what happens (dialog opens but cannot be
     typed into) so it can be documented as a known limit.
 

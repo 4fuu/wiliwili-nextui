@@ -334,6 +334,9 @@
   },
   "player": {
     "intro": "소개",
+    "info_up": "업로더",
+    "info_action": "액션",
+    "info_switch": "전환",
     "p": "부분",
     "ugc_season": "재생목록",
     "related": "관련",

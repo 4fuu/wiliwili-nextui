@@ -22,6 +22,7 @@
 #include "view/grid_dropdown.hpp"
 #include "view/subtitle_core.hpp"
 #include "view/mpv_core.hpp"
+#include "view/user_info.hpp"
 
 class DataSourceCommentList : public RecyclingGridDataSource, public CommentAction {
 public:
@@ -200,9 +201,10 @@ private:
 void BasePlayerActivity::onContentAvailable() { this->setCommonData(); }
 
 void BasePlayerActivity::setCommonData() {
-    // 大缩放档 (400p/480p) 下左栏较窄：把 UP 主行和操作按钮改为上下排列，
-    // 避免四个操作按钮挤在一行互相重叠，同时让 UP 主行拿到完整宽度。
+    // 大缩放档 (400p/480p) 下左栏较窄、竖向空间紧张：把 UP 主信息和操作按钮
+    // 合并成一个区域交替展示，标题右侧的开关和 Y 键切换，省出的高度留给视频。
     if (brls::Application::ORIGINAL_WINDOW_WIDTH < 900) {
+        this->compactInfoPanel = true;
         this->videoInfoRow->setAxis(brls::Axis::COLUMN);
         this->videoInfoRow->setAlignItems(brls::AlignItems::STRETCH);
         this->videoInfoRow->setJustifyContent(brls::JustifyContent::FLEX_START);
@@ -211,8 +213,31 @@ void BasePlayerActivity::setCommonData() {
         this->videoInfoUserBox->setGrow(0);
         this->videoActionBox->setWidthPercentage(100);
         this->videoActionBox->setPaddingLeft(10);
-        this->videoActionBox->setMarginTop(4);
         this->videoActionBox->setJustifyContent(brls::JustifyContent::FLEX_START);
+        // 百分比高度在控件隐藏后重新排布时基准会变，固定尺寸保证两种视图来回切换时布局稳定
+        this->videoUserInfo->setHeight(80);
+        this->videoUserInfo->getAvatar()->setWidth(72);
+        this->videoUserInfo->getAvatar()->setHeight(72);
+        this->videoInfoToggle->setVisibility(brls::Visibility::VISIBLE);
+        this->setInfoPanelShowsActions(false);
+
+        // 点击 / A 切换
+        this->videoInfoToggle->registerClickAction([this](brls::View* view) -> bool {
+            this->toggleInfoPanel();
+            return true;
+        });
+        this->videoInfoToggle->addGestureRecognizer(new brls::TapGestureRecognizer(this->videoInfoToggle));
+
+        // Y 键切换，焦点在信息区域的任意位置都可用
+        brls::Box* infoBoxes[] = {this->videoInfoRow, this->videoInfoToggle};
+        for (brls::Box* box : infoBoxes) {
+            box->registerAction(
+                "wiliwili/player/info_switch"_i18n, brls::ControllerButton::BUTTON_Y,
+                [this](brls::View* view) -> bool {
+                    this->toggleInfoPanel();
+                    return true;
+                });
+        }
     }
 
     // 视频评论
@@ -411,6 +436,37 @@ void BasePlayerActivity::setCommonData() {
     if (brls::Application::ORIGINAL_WINDOW_HEIGHT < 720) video->hideStatusLabel();
 
     video->hideOSDLockButton();
+}
+
+void BasePlayerActivity::setInfoPanelShowsActions(bool showActions) {
+    this->infoPanelShowsActions = showActions;
+    this->videoInfoUserBox->setVisibility(showActions ? brls::Visibility::GONE : brls::Visibility::VISIBLE);
+    this->videoActionBox->setVisibility(showActions ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
+
+    // 被隐藏一侧的控件仍会出现在焦点遍历里（borealis 只看控件自身的 visibility），
+    // 因此同时切换它们的可聚焦状态，避免焦点落到看不见的控件上。
+    this->videoUserInfo->setFocusable(!showActions);
+    for (brls::View* action : {this->btnAgree->getParent(), this->btnCoin->getParent(),
+                               this->btnFavorite->getParent(), this->btnQR->getParent()})
+        action->setFocusable(showActions);
+
+    // 当前视图的标签用主题色，另一个用灰色
+    auto theme = brls::Application::getTheme();
+    this->toggleUpLabel->setTextColor(theme.getColor(showActions ? "font/grey" : "color/bilibili"));
+    this->toggleActionLabel->setTextColor(theme.getColor(showActions ? "color/bilibili" : "font/grey"));
+}
+
+void BasePlayerActivity::toggleInfoPanel() {
+    if (!this->compactInfoPanel) return;
+
+    // 正在浏览的视图马上会被隐藏，把焦点交给新视图的第一个可聚焦项
+    bool userHadFocus    = this->videoInfoUserBox->isChildFocused();
+    bool actionsHadFocus = this->videoActionBox->isChildFocused();
+    this->setInfoPanelShowsActions(!this->infoPanelShowsActions);
+    if (userHadFocus && this->infoPanelShowsActions)
+        brls::Application::giveFocus(this->btnAgree->getParent());
+    else if (actionsHadFocus && !this->infoPanelShowsActions)
+        brls::Application::giveFocus(this->videoUserInfo);
 }
 
 void BasePlayerActivity::showCollectionDialog(uint64_t id, int videoType) {
