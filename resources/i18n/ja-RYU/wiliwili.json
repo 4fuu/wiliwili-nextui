@@ -334,6 +334,9 @@
   },
   "player": {
     "intro": "序章",
+    "info_up": "投稿者",
+    "info_action": "操作",
+    "info_switch": "切替",
     "p": "パート",
     "ugc_season": "プレイリスト",
     "related": "関連",

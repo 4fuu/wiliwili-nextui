@@ -50,6 +50,10 @@ public:
     // 设置 点赞、收藏、投币 三个按钮的样式
     void setRelationButton(bool liked, bool coin, bool favorite);
 
+    // 大缩放档下 UP 主信息与操作按钮共用一个区域，这里在两种视图间切换
+    void setInfoPanelShowsActions(bool showActions);
+    void toggleInfoPanel();
+
     // 展示收藏列表对话框
     void showCollectionDialog(uint64_t id, int videoType);
 
@@ -111,6 +115,9 @@ protected:
     BRLS_BIND(brls::Box, videoInfoRow, "video/info/row");
     BRLS_BIND(brls::Box, videoInfoUserBox, "video/info/user");
     BRLS_BIND(brls::Box, videoActionBox, "video/action/box");
+    BRLS_BIND(brls::Box, videoInfoToggle, "video/info/toggle");
+    BRLS_BIND(brls::Label, toggleUpLabel, "video/info/toggle/up");
+    BRLS_BIND(brls::Label, toggleActionLabel, "video/info/toggle/action");
     BRLS_BIND(brls::Box, videoTitleBox, "video/title/box");
     BRLS_BIND(brls::Label, videoTitleLabel, "video/title");
     BRLS_BIND(brls::Label, videoBVIDLabel, "video/bvid");
@@ -140,6 +147,10 @@ protected:
 private:
     bool activityShown = false;
     std::chrono::system_clock::time_point videoDeadline{};
+
+    // 大缩放档下用单个区域交替展示 UP 主信息 / 操作按钮
+    bool compactInfoPanel = false;
+    bool infoPanelShowsActions = false;
 
     // 重新选择当前清晰度的播放链接播放
     void updateVideoLink();

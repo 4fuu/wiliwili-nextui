@@ -334,6 +334,9 @@
   },
   "player": {
     "intro": "查看简介",
+    "info_up": "UP主",
+    "info_action": "互动",
+    "info_switch": "切换",
     "p": "分集",
     "ugc_season": "合集",
     "related": "推荐",

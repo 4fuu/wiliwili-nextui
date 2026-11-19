@@ -47,7 +47,43 @@
                             wireframe="false"
                             fontSize="24"
                             marginLeft="10"
+                            grow="1"
                             singleLine="true"/>
+
+                    <!-- 大缩放档下 UP 主信息与操作按钮共用一个区域，这里是切换开关 -->
+                    <brls:Box
+                            id="video/info/toggle"
+                            wireframe="false"
+                            visibility="gone"
+                            focusable="true"
+                            alignItems="center"
+                            justifyContent="center"
+                            width="120"
+                            height="26"
+                            shrink="0"
+                            paddingLeft="8"
+                            paddingRight="8"
+                            marginRight="10"
+                            cornerRadius="13"
+                            backgroundColor="@theme/color/grey_1">
+                        <brls:Label
+                                id="video/info/toggle/up"
+                                wireframe="false"
+                                width="48"
+                                shrink="0"
+                                marginRight="8"
+                                fontSize="13"
+                                horizontalAlign="center"
+                                text="@i18n/wiliwili/player/info_up"/>
+                        <brls:Label
+                                id="video/info/toggle/action"
+                                wireframe="false"
+                                width="48"
+                                shrink="0"
+                                fontSize="13"
+                                horizontalAlign="center"
+                                text="@i18n/wiliwili/player/info_action"/>
+                    </brls:Box>
                 </brls:Box>
 
 
