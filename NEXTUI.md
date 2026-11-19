@@ -84,7 +84,7 @@ stays at the full 1024x768 panel size; only the logical canvas changes, and the
 setting requires a relaunch (the app exits to the NextUI desktop on change).
 At both large steps the player merges the UP row and the
 like/coin/favorite/share row into one region that switches between them, so the
-video keeps its height and neither state overlaps. The `UP主 ⇄ 互动` switch in
+video keeps its height and neither state overlaps. The `UP主 / 互动` switch in
 the title row (tap or A) and **Y** in the info area flip the view; the footer
 hint bar shows the switch while that region has focus.
 

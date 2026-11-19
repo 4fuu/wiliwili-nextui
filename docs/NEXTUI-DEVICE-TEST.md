@@ -39,7 +39,7 @@ Prepare:
    the bottom hint bar must show `A` for confirm and `B` for back.
 9. Open a video detail page, move through tabs with L/R.
 10. The player info block shows the uploader (avatar, name, follower count,
-    follow button). Press **Y** or tap the `UP主 ⇄ 互动` switch next to the
+    follow button). Press **Y** or tap the `UP主 / 互动` switch next to the
     title: it must swap to like/coin/favorite/share with their counts, and
     back. In both states at 480p and 400p nothing may overlap, and the footer
     hint bar must offer the switch while the block is focused.
