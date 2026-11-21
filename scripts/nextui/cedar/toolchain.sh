@@ -22,7 +22,7 @@ mkdir -p "$CACHE"
 if [ ! -x "$CACHE/$BOOTLIN/bin/aarch64-buildroot-linux-gnu-gcc" ]; then
     echo "==> download $BOOTLIN" >&2
     curl -sfL -o "$CACHE/$BOOTLIN.tar.bz2" "$URL"
-    echo "$BOOTLIN_SHA  $CACHE/$BOOTLIN.tar.bz2" | sha256sum -c -
+    echo "$BOOTLIN_SHA  $CACHE/$BOOTLIN.tar.bz2" | sha256sum -c - >&2
     tar xjf "$CACHE/$BOOTLIN.tar.bz2" -C "$CACHE"
 fi
 
