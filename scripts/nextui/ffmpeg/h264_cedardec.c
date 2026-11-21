@@ -433,7 +433,6 @@ fail:
 #define CEDAR_AU_MARKER  0x7f7f7f7f /* pts of the "flush" access unit */
 
 #define CEDAR_PARSE_WAIT_NS 10000000ull /* how long to wait for the parser */
-#define CEDAR_STALL_FRAMES  30          /* reset after this many without a picture */
 #define CEDAR_VBV_BYTES  (4 << 20)
 
 typedef struct H264CedarContext {
@@ -442,7 +441,7 @@ typedef struct H264CedarContext {
     int logged_picture;  /* first picture already described in the log */
     int submitted;       /* access units accepted by the vendor parser */
     int pending_frames;  /* access units submitted but not decoded yet */
-    int no_picture_run;  /* consecutive decodes without a picture */
+    int decoded;         /* at least one picture came out */
     int64_t parse_deadline; /* when to stop waiting for the parser */
     int flushed;         /* trailing access unit submitted after EOF */
     int eof_returned;
@@ -729,17 +728,8 @@ static void cedar_take_picture(AVCodecContext *avctx, AVFrame *frame,
             cedar_api->return_picture(ctx->handle, latest);
         latest = pic;
     }
-    if (!latest) {
-        if (++ctx->no_picture_run >= CEDAR_STALL_FRAMES) {
-            /* The engine is not producing pictures: start over. */
-            cedar_note("no picture for %d frames, resetting the decoder",
-                       ctx->no_picture_run);
-            cedar_api->reset(ctx->handle);
-            ctx->no_picture_run = 0;
-        }
+    if (!latest)
         return;
-    }
-    ctx->no_picture_run = 0;
 
     if (latest->bFrameErrorFlag) {
         cedar_api->return_picture(ctx->handle, latest);
@@ -750,61 +740,45 @@ static void cedar_take_picture(AVCodecContext *avctx, AVFrame *frame,
     cedar_api->return_picture(ctx->handle, latest);
 }
 
-static int cedar_run(AVCodecContext *avctx, AVFrame *frame, int *got_picture)
+/*
+ * One decode step, as in the proven engine path: after an access unit has
+ * been submitted, DecodeVideoStream reports whether a frame came out. A
+ * "needs more input" answer is not retried here, it goes back to libavcodec
+ * as EAGAIN so the next packet is fed, exactly like cedar_sdl.c, which calls
+ * decode once per received frame.
+ */
+static int cedar_step(AVCodecContext *avctx, AVFrame *frame, int *got_picture)
 {
     H264CedarContext *ctx = avctx->priv_data;
-    int ret = CEDAR_RESULT_CONTINUE;
-    int tries, errors = 0;
+    int r = cedar_api->decode(ctx->handle, 0, 0, 0, 0);
 
     *got_picture = 0;
-    for (tries = 0; tries < 32; tries++) {
-        int r = cedar_api->decode(ctx->handle, 0, 0, 0, 0);
+    if (ctx->submitted <= 2)
+        cedar_note("DecodeVideoStream -> %d (%s)", r, cedar_result_name(r));
 
-        if (ctx->submitted <= 2)
-            cedar_note("DecodeVideoStream -> %d (%s)", r,
-                       cedar_result_name(r));
-        ret = r;
-        if (r == CEDAR_RESULT_FRAME_DECODED ||
-            r == CEDAR_RESULT_KEYFRAME_DECODED) {
-            if (ctx->pending_frames > 0)
-                ctx->pending_frames--;
-            if (ctx->pending_frames == 0)
-                break;
-            continue; /* an older frame: keep going for ours */
-        }
-        if (r == CEDAR_RESULT_NO_BITSTREAM) {
-            /* The parser thread has not split the access unit yet. */
-            if (av_gettime_relative() < ctx->parse_deadline) {
-                av_usleep(200);
-                continue;
-            }
-            break;
-        }
-        if (r == CEDAR_RESULT_CONTINUE || r == CEDAR_RESULT_OK)
-            continue;
-        if (r == CEDAR_RESULT_NO_FRAME_BUFFER) {
-            av_usleep(1000);
-            continue;
-        }
-        errors++;
-        break;
-    }
-    if (ctx->pending_frames > 0 && (ret == CEDAR_RESULT_FRAME_DECODED ||
-                                    ret == CEDAR_RESULT_KEYFRAME_DECODED))
-        errors++; /* the frame did not finish in time */
-
-    if (ret == CEDAR_RESULT_FRAME_DECODED ||
-        ret == CEDAR_RESULT_KEYFRAME_DECODED)
+    switch (r) {
+    case CEDAR_RESULT_FRAME_DECODED:
+    case CEDAR_RESULT_KEYFRAME_DECODED:
+        if (ctx->pending_frames > 0)
+            ctx->pending_frames--;
         cedar_take_picture(avctx, frame, got_picture);
-
-    if (ret == CEDAR_RESULT_RESOLUTION_CHANGE)
-        errors++;
-
-    if (errors) {
-        cedar_warn("decode error (%s)", cedar_result_name(ret));
+        ctx->decoded = 1;
+        return 0;
+    case CEDAR_RESULT_NO_BITSTREAM:
+    case CEDAR_RESULT_CONTINUE:
+    case CEDAR_RESULT_OK:
+        /* The parser has not closed a frame yet: feed it more. */
+        return AVERROR(EAGAIN);
+    case CEDAR_RESULT_NO_FRAME_BUFFER:
+        return AVERROR(EAGAIN);
+    case CEDAR_RESULT_RESOLUTION_CHANGE:
+        /* Not recoverable in place: mpv counts this and falls back. */
+        cedar_warn("resolution change");
+        return AVERROR_INVALIDDATA;
+    default:
+        cedar_warn("decode error (%s)", cedar_result_name(r));
         return AVERROR_INVALIDDATA;
     }
-    return AVERROR(EAGAIN);
 }
 
 static int h264_cedar_decode(AVCodecContext *avctx, AVFrame *frame,
@@ -827,7 +801,7 @@ static int h264_cedar_decode(AVCodecContext *avctx, AVFrame *frame,
             if (ret < 0)
                 return AVERROR_EOF;
         }
-        cedar_run(avctx, frame, got_frame);
+        cedar_step(avctx, frame, got_frame);
         if (!*got_frame) {
             ctx->eof_returned = 1;
             return AVERROR_EOF;
@@ -851,6 +825,16 @@ static int h264_cedar_decode(AVCodecContext *avctx, AVFrame *frame,
         }
     }
 
+    if (!ctx->submitted && cedar_verbose()) {
+        char hex[32 * 3 + 1];
+        int n = FFMIN(avpkt->size, 32), i;
+
+        for (i = 0; i < n; i++)
+            snprintf(hex + i * 3, 4, "%02x ", avpkt->data[i]);
+        hex[n * 3] = 0;
+        cedar_note("first access unit, first %d bytes: %s", n, hex);
+    }
+
     ret = cedar_submit(avctx, avpkt->data, avpkt->size, avpkt->pts);
     if (ret == AVERROR(ENOMEM)) {
         /* Stream buffer full: drop this one, the engine recovers at the
@@ -863,20 +847,19 @@ static int h264_cedar_decode(AVCodecContext *avctx, AVFrame *frame,
         return ret;
     }
 
-    ret = cedar_run(avctx, frame, got_frame);
+    /*
+     * One decode call, then report. A real error is returned as an error
+     * (libavcodec asserts that a decode callback never returns EAGAIN);
+     * "needs more input" is the only thing that becomes EAGAIN, which asks
+     * libavcodec for the next packet instead of spinning here.
+     */
+    ret = cedar_step(avctx, frame, got_frame);
     if (*got_frame)
         return avpkt->size;
-    /*
-     * No picture yet: the parser is still splitting the access unit and wants
-     * the next packet, which is what EAGAIN tells libavcodec. A real error
-     * must not be turned into EAGAIN here: decode_simple_internal() asserts
-     * that a decode callback never returns AVERROR(EAGAIN).
-     */
-    if (ret < 0 && ret != AVERROR(EAGAIN)) {
-        cedar_failed = 1;
+    if (ret == AVERROR(EAGAIN))
         return ret;
-    }
-    return AVERROR(EAGAIN);
+    cedar_failed = 1;
+    return ret;
 }
 
 static av_cold int h264_cedar_init(AVCodecContext *avctx)
@@ -915,9 +898,16 @@ static void h264_cedar_flush(AVCodecContext *avctx)
 {
     H264CedarContext *ctx = avctx->priv_data;
 
+    /*
+     * Seeks and discards must start clean. ResetVideoDecoder() is part of
+     * the vendor API but its teardown has been where this unit aborted, so
+     * only a decoder that has decoded and has no picture outstanding is
+     * reset; otherwise the stream restarts with the next key frame and the
+     * pictures are simply discarded by the parser.
+     */
     ctx->flushed = 0;
     ctx->eof_returned = 0;
-    if (ctx->handle)
+    if (ctx->handle && ctx->decoded && !ctx->pending_frames)
         cedar_api->reset(ctx->handle);
 }
 
