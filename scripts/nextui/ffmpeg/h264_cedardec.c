@@ -328,7 +328,7 @@ static void *cedar_open_lib(const char *name)
     do {                                                                      \
         *(void **)&api->field = dlsym(handle, name);                          \
         if (!api->field) {                                                    \
-            cedar_note("missing symbol %s\n",    \
+            cedar_note("missing symbol %s",    \
                    name);                                                     \
             goto fail;                                                        \
         }                                                                     \
@@ -352,13 +352,13 @@ static int cedar_load(AVCodecContext *avctx)
      */
     api->vdecoder = cedar_open_lib("libvdecoder.so");
     if (!api->vdecoder) {
-        cedar_note("dlopen libvdecoder.so: %s\n",
+        cedar_note("dlopen libvdecoder.so: %s",
            dlerror());
         goto fail;
     }
     api->videoengine = cedar_open_lib("libvideoengine.so");
     if (!api->videoengine) {
-        cedar_note("dlopen libvideoengine.so: %s\n", dlerror());
+        cedar_note("dlopen libvideoengine.so: %s", dlerror());
         goto fail;
     }
 
@@ -381,15 +381,15 @@ static int cedar_load(AVCodecContext *avctx)
      * image ships libawh265.so, so its absence is not an error.
      */
     if (access("/usr/lib/libawh264.so", R_OK) == 0) {
-        cedar_note("loading /usr/lib/libawh264.so\n");
+        cedar_note("loading /usr/lib/libawh264.so");
         api->add_plugin((char *)"/usr/lib/libawh264.so");
         api->h264_plugin = 1;
     }
     cedar_api = api;
-    cedar_note("vendor decoder %s\n",
+    cedar_note("vendor decoder %s",
            api->h264_plugin ? "loaded" : "unavailable");
     if (!api->h264_plugin) {
-        cedar_note("/usr/lib/libawh264.so is not installed\n");
+        cedar_note("/usr/lib/libawh264.so is not installed");
         return AVERROR_DECODER_NOT_FOUND;
     }
     return 0;
@@ -463,17 +463,17 @@ static int cedar_open_decoder(AVCodecContext *avctx, int width, int height)
 
     ctx->handle = cedar_api->create();
     if (!ctx->handle) {
-        cedar_note("CreateVideoDecoder failed\n");
+        cedar_note("CreateVideoDecoder failed");
         return AVERROR_EXTERNAL;
     }
     cedar_note("decoder %p, InitializeVideoDecoder(%dx%d, %d fps, fmt %d, "
-               "vbv %d, hold %d, smooth %d, align %d)\n",
+               "vbv %d, hold %d, smooth %d, align %d)",
                (void *)ctx->handle, width, height, info.nFrameRate / 1000,
                cfg.eOutputPixelFormat, cfg.nVbvBufferSize,
                cfg.nDisplayHoldingFrameBufferNum,
                cfg.nDecodeSmoothFrameBufferNum, cfg.nAlignStride);
     ret = cedar_api->initialize(ctx->handle, &info, &cfg);
-    cedar_note("InitializeVideoDecoder -> %d\n",
+    cedar_note("InitializeVideoDecoder -> %d",
            ret);
     if (ret) {
         /*
@@ -483,13 +483,13 @@ static int cedar_open_decoder(AVCodecContext *avctx, int width, int height)
          * the app exits either way. mpv falls back to software decoding.
          */
         ctx->handle = NULL;
-        cedar_note("InitializeVideoDecoder failed (%d)\n", ret);
+        cedar_note("InitializeVideoDecoder failed (%d)", ret);
         return AVERROR_EXTERNAL;
     }
     ctx->width   = width;
     ctx->height  = height;
     ctx->flushed = 0;
-    cedar_note("decoder opened (%dx%d)\n", width,
+    cedar_note("decoder opened (%dx%d)", width,
            height);
     return 0;
 }
@@ -512,7 +512,7 @@ static void cedar_close_decoder(AVCodecContext *avctx)
         cedar_api->destroy(ctx->handle);
     } else {
         cedar_note("decoder never received input; leaving it to the "
-               "vendor library instead of destroying it\n");
+                   "vendor library instead of destroying it");
     }
     ctx->handle = NULL;
 }
@@ -542,7 +542,7 @@ static int cedar_submit(AVCodecContext *avctx, const uint8_t *data, int size,
     ret = cedar_api->request_stream(ctx->handle, size, &buf, &buf_size, &ring,
                                     &ring_size, 0);
     if (ret || !buf || (int64_t)buf_size + ring_size < size) {
-        cedar_note("no room for a %d byte access unit (sbm full?)\n",
+        cedar_note("no room for a %d byte access unit (sbm full?)",
            size);
         return AVERROR(ENOMEM);
     }
@@ -584,12 +584,12 @@ static int cedar_copy_picture(AVCodecContext *avctx, AVFrame *frame,
 
     if (pic->ePixelFormat != CEDAR_PIXEL_NV12 &&
         pic->ePixelFormat != CEDAR_PIXEL_NV21) {
-        cedar_note("unsupported picture format %d\n",
+        cedar_note("unsupported picture format %d",
            pic->ePixelFormat);
         return AVERROR_PATCHWELCOME;
     }
     if (!pic->pData0 || !pic->pData1 || pic->nLineStride <= 0) {
-        cedar_note("picture has no CPU mapping (pData0=%p pData1=%p)\n",
+        cedar_note("picture has no CPU mapping (pData0=%p pData1=%p)",
            pic->pData0, pic->pData1);
         return AVERROR_EXTERNAL;
     }
@@ -625,7 +625,7 @@ static int cedar_copy_picture(AVCodecContext *avctx, AVFrame *frame,
      */
     if (avctx->pix_fmt != frame->format ||
         avctx->width != pic->nWidth || avctx->height != pic->nHeight) {
-        cedar_note("output %s %dx%d, stride %d, crop %d,%d %dx%d\n",
+        cedar_note("output %s %dx%d, stride %d, crop %d,%d %dx%d",
            av_get_pix_fmt_name(frame->format), pic->nWidth, pic->nHeight,
            pic->nLineStride, pic->nLeftOffset, pic->nTopOffset,
            pic->nRightOffset - pic->nLeftOffset,
@@ -669,7 +669,7 @@ static int cedar_copy_picture(AVCodecContext *avctx, AVFrame *frame,
      * (av_assert0 in decode_simple_internal): fail instead of aborting.
      */
     if (!frame->buf[0]) {
-        cedar_note("frame buffer allocation returned no buffer\n");
+        cedar_note("frame buffer allocation returned no buffer");
         return AVERROR(ENOMEM);
     }
     return 0;
@@ -687,8 +687,16 @@ static int cedar_run(AVCodecContext *avctx, AVFrame *frame, int *got_picture)
 
     *got_picture = 0;
     for (;;) {
-        int r = cedar_api->decode(ctx->handle, 0, 0, 0, 0);
+        int r;
         int64_t now;
+
+        if (ctx->submitted <= 2)
+            cedar_note("about to DecodeVideoStream (submitted %d)",
+                       ctx->submitted);
+        r = cedar_api->decode(ctx->handle, 0, 0, 0, 0);
+        if (ctx->submitted <= 2)
+            cedar_note("DecodeVideoStream -> %d (%s)", r,
+                       cedar_result_name(r));
 
         switch (r) {
         case CEDAR_RESULT_FRAME_DECODED:
@@ -710,7 +718,7 @@ static int cedar_run(AVCodecContext *avctx, AVFrame *frame, int *got_picture)
                 pic->nPts != CEDAR_AU_MARKER && pic->nPts > INT64_MIN / 2)
                 frame->pts = pic->nPts;
             if (ret < 0)
-                cedar_note("picture %d could not be copied\n", pic->nID);
+                cedar_note("picture %d could not be copied", pic->nID);
             cedar_api->return_picture(ctx->handle, pic);
             if (ret < 0)
                 break;
@@ -718,7 +726,7 @@ static int cedar_run(AVCodecContext *avctx, AVFrame *frame, int *got_picture)
             break;
         }
         case CEDAR_RESULT_RESOLUTION_CHANGE:
-            cedar_note("resolution change\n");
+            cedar_note("resolution change");
             ret = AVERROR(EAGAIN);
             break;
         case CEDAR_RESULT_NO_BITSTREAM:
@@ -731,7 +739,7 @@ static int cedar_run(AVCodecContext *avctx, AVFrame *frame, int *got_picture)
             ret = AVERROR(EAGAIN);
             break;
         default:
-            cedar_note("decode result %s (%d)\n",
+            cedar_note("decode result %s (%d)",
            cedar_result_name(r), r);
             ret = AVERROR_INVALIDDATA;
             break;
@@ -807,7 +815,7 @@ static int h264_cedar_decode(AVCodecContext *avctx, AVFrame *frame,
     if (ret == AVERROR(ENOMEM)) {
         /* The stream buffer has no room for this access unit: drop it, the
          * decoder recovers at the next key frame instead of dying. */
-        cedar_note("dropped a %d byte access unit\n", avpkt->size);
+        cedar_note("dropped a %d byte access unit", avpkt->size);
         *got_frame = 0;
         return avpkt->size;
     }
@@ -834,7 +842,7 @@ static int h264_cedar_decode(AVCodecContext *avctx, AVFrame *frame,
          * hardware decoder as one that failed to open.
          */
         cedar_note("giving up on the hardware decoder after a "
-               "decode error\n");
+               "decode error");
         cedar_failed = 1;
     }
     return ret;
@@ -858,7 +866,7 @@ static av_cold int h264_cedar_init(AVCodecContext *avctx)
      */
     if (cedar_used) {
         cedar_note("already used once in this process, not opening "
-               "again\n");
+               "again");
         return AVERROR_DECODER_NOT_FOUND;
     }
     /*
@@ -869,7 +877,7 @@ static av_cold int h264_cedar_init(AVCodecContext *avctx)
      */
     if (cedar_failed) {
         cedar_note("the vendor decoder failed earlier in this "
-               "process, not opening it again\n");
+               "process, not opening it again");
         return AVERROR_DECODER_NOT_FOUND;
     }
     return 0;
