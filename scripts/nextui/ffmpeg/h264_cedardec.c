@@ -288,6 +288,8 @@ typedef struct CedarAPI {
 } CedarAPI;
 
 static CedarAPI *cedar_api;
+static int cedar_used;   /* the vendor decoder was initialized once already */
+static int cedar_failed; /* a decode error happened; stop using it */
 
 static void *cedar_open_lib(const char *name)
 {
@@ -359,10 +361,13 @@ static int cedar_load(AVCodecContext *avctx)
      * image ships libawh265.so, so its absence is not an error.
      */
     if (access("/usr/lib/libawh264.so", R_OK) == 0) {
+        av_log(avctx, AV_LOG_INFO, "h264_cedar: loading /usr/lib/libawh264.so\n");
         api->add_plugin((char *)"/usr/lib/libawh264.so");
         api->h264_plugin = 1;
     }
     cedar_api = api;
+    av_log(avctx, AV_LOG_INFO, "h264_cedar: vendor decoder %s\n",
+           api->h264_plugin ? "loaded" : "unavailable");
     if (!api->h264_plugin) {
         av_log(avctx, AV_LOG_INFO,
                "h264_cedar: /usr/lib/libawh264.so is not installed\n");
@@ -389,6 +394,7 @@ fail:
 typedef struct H264CedarContext {
     CedarDecoder *handle;
     int width, height;
+    int submitted;       /* access units accepted by the vendor parser */
     int flushed;         /* trailing access unit submitted after EOF */
     int eof_returned;
 } H264CedarContext;
@@ -416,8 +422,9 @@ static int cedar_open_decoder(AVCodecContext *avctx, int width, int height)
     info.eCodecFormat     = CEDAR_CODEC_H264;
     info.nWidth           = width;
     info.nHeight          = height;
-    info.nFrameRate       = 30 * 1000;
-    info.nFrameDuration   = 1000000 / 30;
+    /* The same frame timing the Cedar wrapper uses on this device. */
+    info.nFrameRate       = 60 * 1000;
+    info.nFrameDuration   = 1000000 / 60;
     info.bIsFramePackage  = 1;
 
     memset(&cfg, 0, sizeof(cfg));
@@ -435,10 +442,21 @@ static int cedar_open_decoder(AVCodecContext *avctx, int width, int height)
         av_log(avctx, AV_LOG_ERROR, "h264_cedar: CreateVideoDecoder failed\n");
         return AVERROR_EXTERNAL;
     }
+    av_log(avctx, AV_LOG_INFO,
+           "h264_cedar: decoder %p, InitializeVideoDecoder(%dx%d, %d fps, "
+           "fmt %d, vbv %d)\n",
+           (void *)ctx->handle, width, height, info.nFrameRate / 1000,
+           cfg.eOutputPixelFormat, cfg.nVbvBufferSize);
     ret = cedar_api->initialize(ctx->handle, &info, &cfg);
+    av_log(avctx, AV_LOG_INFO, "h264_cedar: InitializeVideoDecoder -> %d\n",
+           ret);
     if (ret) {
-        /* InitializeVideoDecoder is not transactional: start over. */
-        cedar_api->destroy(ctx->handle);
+        /*
+         * No DestroyVideoDecoder() on this path. On the Brick Pro a decoder
+         * torn down right after a failed Initialize aborts the process in
+         * CdcIonFree (errno 22); libvdecoder keeps its own reference until
+         * the app exits either way. mpv falls back to software decoding.
+         */
         ctx->handle = NULL;
         av_log(avctx, AV_LOG_ERROR,
                "h264_cedar: InitializeVideoDecoder failed (%d)\n", ret);
@@ -452,12 +470,29 @@ static int cedar_open_decoder(AVCodecContext *avctx, int width, int height)
     return 0;
 }
 
-static void cedar_close_decoder(H264CedarContext *ctx)
+static void cedar_close_decoder(AVCodecContext *avctx)
 {
-    if (ctx->handle) {
+    H264CedarContext *ctx = avctx->priv_data;
+
+    if (!ctx->handle)
+        return;
+    /*
+     * The teardown the device test exercised is Initialize -> Submit ->
+     * Destroy (tsp-videotest). A decoder that was initialized but never fed
+     * goes the same way as a failed Initialize, since that is where the
+     * Brick Pro aborted in CdcIonFree: leave it to the vendor library.
+     */
+    if (ctx->submitted) {
+        av_log(avctx, AV_LOG_INFO,
+               "h264_cedar: DestroyVideoDecoder after %d access units\n",
+               ctx->submitted);
         cedar_api->destroy(ctx->handle);
-        ctx->handle = NULL;
+    } else {
+        av_log(avctx, AV_LOG_WARNING,
+               "h264_cedar: decoder never received input; leaving it to the "
+               "vendor library instead of destroying it\n");
     }
+    ctx->handle = NULL;
 }
 
 static int cedar_submit(AVCodecContext *avctx, const uint8_t *data, int size,
@@ -496,6 +531,7 @@ static int cedar_submit(AVCodecContext *avctx, const uint8_t *data, int size,
         av_log(avctx, AV_LOG_ERROR, "h264_cedar: SubmitVideoStreamData failed\n");
         return AVERROR_EXTERNAL;
     }
+    ctx->submitted++;
     return 0;
 }
 
@@ -536,10 +572,12 @@ static int cedar_copy_picture(AVCodecContext *avctx, AVFrame *frame,
      */
     if (avctx->pix_fmt != frame->format ||
         avctx->width != pic->nWidth || avctx->height != pic->nHeight) {
-        av_log(avctx, AV_LOG_DEBUG,
-               "h264_cedar: output %s %dx%d, stride %d\n",
+        av_log(avctx, AV_LOG_INFO,
+               "h264_cedar: output %s %dx%d, stride %d, crop %d,%d %dx%d\n",
                av_get_pix_fmt_name(frame->format), pic->nWidth, pic->nHeight,
-               pic->nLineStride);
+               pic->nLineStride, pic->nLeftOffset, pic->nTopOffset,
+               pic->nRightOffset - pic->nLeftOffset,
+               pic->nBottomOffset - pic->nTopOffset);
         avctx->pix_fmt = frame->format;
         ret = ff_set_dimensions(avctx, pic->nWidth, pic->nHeight);
         if (ret < 0)
@@ -574,6 +612,15 @@ static int cedar_copy_picture(AVCodecContext *avctx, AVFrame *frame,
         frame->color_range = AVCOL_RANGE_JPEG;
     if (pic->matrix_coeffs > 0 && pic->matrix_coeffs <= 11)
         frame->colorspace = (enum AVColorSpace)pic->matrix_coeffs;
+    /*
+     * libavcodec asserts that a successful decode filled frame->buf[0]
+     * (av_assert0 in decode_simple_internal): fail instead of aborting.
+     */
+    if (!frame->buf[0]) {
+        av_log(avctx, AV_LOG_ERROR,
+               "h264_cedar: frame buffer allocation returned no buffer\n");
+        return AVERROR(ENOMEM);
+    }
     return 0;
 }
 
@@ -661,7 +708,7 @@ static int h264_cedar_decode(AVCodecContext *avctx, AVFrame *frame,
     int ret;
 
     if (avpkt->size == 0) {
-        if (!ctx->handle || ctx->eof_returned) {
+        if (!ctx->handle || ctx->eof_returned || cedar_failed) {
             *got_frame = 0;
             return AVERROR_EOF;
         }
@@ -687,18 +734,38 @@ static int h264_cedar_decode(AVCodecContext *avctx, AVFrame *frame,
         return *got_frame ? 0 : AVERROR_EOF;
     }
 
+    if (cedar_failed) {
+        /* Already reported once; from here mpv counts errors and switches
+         * to software decoding. */
+        *got_frame = 0;
+        return AVERROR_INVALIDDATA;
+    }
+
     if (!ctx->handle) {
         int width  = avctx->coded_width  > 0 ? avctx->coded_width  : 1920;
         int height = avctx->coded_height > 0 ? avctx->coded_height : 1080;
 
         ret = cedar_open_decoder(avctx, width, height);
-        if (ret < 0)
+        if (ret < 0) {
+            cedar_failed = 1;
             return ret;
+        }
+        cedar_used = 1;
     }
 
     ret = cedar_submit(avctx, avpkt->data, avpkt->size, avpkt->pts);
-    if (ret < 0)
+    if (ret == AVERROR(ENOMEM)) {
+        /* The stream buffer has no room for this access unit: drop it, the
+         * decoder recovers at the next key frame instead of dying. */
+        av_log(avctx, AV_LOG_WARNING,
+               "h264_cedar: dropped a %d byte access unit\n", avpkt->size);
+        *got_frame = 0;
+        return avpkt->size;
+    }
+    if (ret < 0) {
+        cedar_failed = 1;
         return ret;
+    }
 
     /*
      * The Cedar parser thread splits access units asynchronously. Until it
@@ -710,23 +777,61 @@ static int h264_cedar_decode(AVCodecContext *avctx, AVFrame *frame,
     *got_frame = *got_frame ? 1 : 0;
     if (*got_frame)
         return avpkt->size;
+    if (ret == AVERROR_INVALIDDATA) {
+        /*
+         * The engine is stuck (typically a corrupt stream). Stop using it:
+         * mpv counts decode errors and switches to its software decoder,
+         * while avcodec_open2() keeps succeeding so mpv does not treat the
+         * hardware decoder as one that failed to open.
+         */
+        av_log(avctx, AV_LOG_WARNING,
+               "h264_cedar: giving up on the hardware decoder after a "
+               "decode error\n");
+        cedar_failed = 1;
+    }
     return ret;
 }
 
 static av_cold int h264_cedar_init(AVCodecContext *avctx)
 {
     H264CedarContext *ctx = avctx->priv_data;
+    int ret;
 
     /* priv_data is not zeroed by this FFmpeg (no .flush at init). */
     memset(ctx, 0, sizeof(*ctx));
-    return cedar_load(avctx);
+    ret = cedar_load(avctx);
+    if (ret < 0)
+        return ret;
+    /*
+     * This is a one-shot hardware decoder. A file that cannot be decoded
+     * with it (InitializeVideoDecoder failure, an unsupported stream) leaves
+     * the vendor engine in a state that must not be torn down or reused, so
+     * the instance is not opened again and mpv falls back to software.
+     */
+    if (cedar_used) {
+        av_log(avctx, AV_LOG_INFO,
+               "h264_cedar: already used once in this process, not opening "
+               "again\n");
+        return AVERROR_DECODER_NOT_FOUND;
+    }
+    /*
+     * A decode failure is final for this decoder (see h264_cedar_decode).
+     * Failing avcodec_open2() instead would make mpv open it again for every
+     * packet it sends, and a successful open is what mpv checks for when it
+     * decides that no hwdec fallback is needed.
+     */
+    if (cedar_failed) {
+        av_log(avctx, AV_LOG_INFO,
+               "h264_cedar: the vendor decoder failed earlier in this "
+               "process, not opening it again\n");
+        return AVERROR_DECODER_NOT_FOUND;
+    }
+    return 0;
 }
 
 static av_cold int h264_cedar_close(AVCodecContext *avctx)
 {
-    H264CedarContext *ctx = avctx->priv_data;
-
-    cedar_close_decoder(ctx);
+    cedar_close_decoder(avctx);
     return 0;
 }
 
