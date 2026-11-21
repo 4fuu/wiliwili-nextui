@@ -29,6 +29,7 @@ fi
 BOOT="$CACHE/$BOOTLIN"
 BOOT_SYSROOT="$BOOT/aarch64-buildroot-linux-gnu/sysroot"
 VENDOR_BIN=$(dirname "$(command -v "$CROSS_TRIPLE-gcc")")
+VENDOR_ROOT=${CROSS_ROOT:-}
 
 # Bootlin's ld (2.33) cannot --export-dynamic-symbol, so libsbm binds to
 # SemTimedWait through -Wl,-E on wiliwili (CMakeLists.txt, NEXTUI_TG5040).
@@ -54,7 +55,7 @@ printf 'GROUP ( %s )\n' "$BOOT_SYSROOT/lib/libm.so.6" >"$CACHE/lib/libm.so"
 # with the scripts above, and point the libc.so.6/libpthread.so.0 symlinks at
 # the libraries the scripts name so both resolve to the same files.
 for lib in libc libpthread libm; do
-    for dir in "$SYSROOT/lib" "$SYSROOT/usr/lib"; do
+    for dir in "$SYSROOT/lib" "$SYSROOT/usr/lib" "$VENDOR_ROOT/$CROSS_TRIPLE/libc/lib" "$VENDOR_ROOT/$CROSS_TRIPLE/libc/usr/lib"; do
         if [ -e "$dir/$lib.so" ] && [ ! -e "$dir/$lib.so.vendor" ]; then
             mv "$dir/$lib.so" "$dir/$lib.so.vendor"
         fi
@@ -62,7 +63,7 @@ for lib in libc libpthread libm; do
     done
 done
 for so in libc.so.6 libpthread.so.0 libm.so.6; do
-    for dir in "$SYSROOT/lib" "$SYSROOT/usr/lib"; do
+    for dir in "$SYSROOT/lib" "$SYSROOT/usr/lib" "$VENDOR_ROOT/$CROSS_TRIPLE/libc/lib"; do
         if [ -e "$dir/$so" ] && [ ! -e "$dir/$so.vendor" ]; then
             mv "$dir/$so" "$dir/$so.vendor"
         fi
