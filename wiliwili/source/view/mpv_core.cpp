@@ -39,9 +39,10 @@ mpvRenderContextReportSwapFunc mpvRenderContextReportSwap;
 mpvRenderContextUpdateFunc mpvRenderContextUpdate;
 mpvRenderContextFreeFunc mpvRenderContextFree;
 mpvClientApiVersionFunc mpvClientApiVersion;
-#ifdef NEXTUI_TG5040
-mpvCommandFunc mpvCommand;
 #endif
+
+#ifdef NEXTUI_TG5040
+mpvCommandFunc mpvCommand = mpv_command;
 #endif
 
 #ifdef MPV_USE_FB
