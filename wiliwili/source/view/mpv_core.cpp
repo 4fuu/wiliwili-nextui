@@ -41,10 +41,6 @@ mpvRenderContextFreeFunc mpvRenderContextFree;
 mpvClientApiVersionFunc mpvClientApiVersion;
 #endif
 
-#ifdef NEXTUI_TG5040
-mpvCommandFunc mpvCommand = mpv_command;
-#endif
-
 #ifdef MPV_USE_FB
 #ifdef PS4
 #include "utils/ps4_mpv_shaders.hpp"
@@ -265,9 +261,6 @@ void initMpvProc(Module dll, fnGetProcAddress pGetProcAddress) {
         (mpvRenderContextSetUpdateCallbackFunc)pGetProcAddress(dll, "mpv_render_context_set_update_callback");
     mpvRenderContextReportSwap = (mpvRenderContextReportSwapFunc)pGetProcAddress(dll, "mpv_render_context_report_swap");
     mpvClientApiVersion        = (mpvClientApiVersionFunc)pGetProcAddress(dll, "mpv_client_api_version");
-#ifdef NEXTUI_TG5040
-    mpvCommand                 = (mpvCommandFunc)pGetProcAddress(dll, "mpv_command");
-#endif
 }
 #endif
 
@@ -373,8 +366,10 @@ void MPVCore::init() {
 
     // hardware decoding
     if (CEDAR_DEC) {
-        // 解码器由 FFmpeg 提供，mpv 不需要 hwdec；每个文件加载前再选择解码器
+        // 解码器由 FFmpeg 提供，mpv 不需要 hwdec；由设置直接选定，不做可用性探测
         mpvSetOptionString(mpv, "hwdec", "no");
+        mpvSetOptionString(mpv, "vd", "h264_cedar");
+        brls::Logger::info("MPV video decoder: h264_cedar");
     } else if (HARDWARE_DEC) {
         mpvSetOptionString(mpv, "hwdec", PLAYER_HWDEC_METHOD.c_str());
         brls::Logger::info("MPV hardware decode: {}", PLAYER_HWDEC_METHOD);
@@ -1193,7 +1188,8 @@ void MPVCore::reset() {
 void MPVCore::setUrl(const std::string &url, const std::string &extra, const std::string &method) {
     brls::Logger::debug("{} Url: {}, extra: {}", method, url, extra);
 #ifdef NEXTUI_TG5040
-    if (CEDAR_DEC) MpvCedarDecoder::selectDecoder();
+    // --vd is reset on the next file, so re-apply the setting's choice
+    if (CEDAR_DEC) MpvCedarDecoder::selectDecoder(true);
 #endif
     if (extra.empty()) {
         command_async("loadfile", url, method);

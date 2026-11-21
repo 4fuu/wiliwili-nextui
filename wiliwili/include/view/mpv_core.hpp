@@ -132,16 +132,6 @@ extern mpvClientApiVersionFunc mpvClientApiVersion;
 #define mpvClientApiVersion mpv_client_api_version
 #endif
 
-#ifdef NEXTUI_TG5040
-// mpv_cedar.hpp 会创建临时的 mpv 实例来探测厂商解码器，与 MPVCore 共用这些入口
-using mpvCreateFunc = decltype(&mpvCreate);
-using mpvSetOptionStringFunc = decltype(&mpvSetOptionString);
-using mpvInitializeFunc = decltype(&mpvInitialize);
-using mpvCommandFunc = int (*)(mpv_handle *ctx, const char **args);
-using mpvWaitEventFunc = mpv_event *(*)(mpv_handle *ctx, double timeout);
-using mpvTerminateDestroyFunc = void (*)(mpv_handle *ctx);
-extern mpvCommandFunc mpvCommand;
-#endif
 
 class MPVCore : public brls::Singleton<MPVCore> {
 public:
@@ -375,7 +365,8 @@ public:
     inline static bool HARDWARE_DEC = false;
 
     // 不使用 mpv hwdec，而是由 FFmpeg 中的独立解码器 (h264_cedar) 调用设备厂商
-    // 解码库，见 view/mpv_cedar.hpp。目前仅 NEXTUI_TG5040 使用。
+    // 解码库，见 view/mpv_cedar.hpp。由「硬件解码」设置直接控制，仅
+    // NEXTUI_TG5040 使用。
     inline static bool CEDAR_DEC = false;
 
     // 硬解方式

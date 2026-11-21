@@ -60,9 +60,13 @@ vendor parser is still busy. It is built only in the opt-in
 it fails to open like any other decoder.
 
 wiliwili selects it from `view/mpv_cedar.hpp` when the "hardware decode"
-setting is on: a throwaway mpv instance decodes a 675-byte embedded clip with
-`--vd=h264_cedar`, and only if that succeeds is `vd` forced before each
-`loadfile`. Otherwise the software decoder is used, as before.
+setting is on: `vd=h264_cedar` is forced for every file, and the switch off
+keeps mpv's software decoder. There is no availability probe. The decode loop
+follows the engine path proven on this device (moonlight-nextui's
+`cedar_sdl.c`, itself derived from this spike): one access unit per submit,
+`NO_BITSTREAM`/`CONTINUE` mean "needs more input" and are retried, and every
+failure returns an FFmpeg error instead of aborting. Diagnostics are off by
+default; `H264_CEDAR_TRACE=1` in the environment turns on per-call tracing.
 
 ## Toolchain
 
