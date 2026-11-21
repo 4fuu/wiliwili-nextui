@@ -41,6 +41,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "libavcodec/bsf.h"
 #include "libavutil/frame.h"
 #include "libavutil/imgutils.h"
 #include "libavutil/log.h"
@@ -436,6 +437,7 @@ fail:
 #define CEDAR_VBV_BYTES  (4 << 20)
 
 typedef struct H264CedarContext {
+    AVBSFContext *annexb; /* MP4-style input -> Annex-B for the vendor parser */
     CedarDecoder *handle;
     int width, height;
     int logged_picture;  /* first picture already described in the log */
@@ -518,6 +520,30 @@ static int cedar_open_decoder(AVCodecContext *avctx, int width, int height)
     ctx->width   = width;
     ctx->height  = height;
     ctx->flushed = 0;
+    /*
+     * mpv hands this decoder MP4-style packets: extradata with the SPS/PPS
+     * and length-prefixed NAL units. The Cedar parser only understands
+     * Annex-B start codes, so everything goes through h264_mp4toannexb,
+     * extradata included, before it reaches the vendor library. Annex-B
+     * input passes through unchanged.
+     */
+    if (!ctx->annexb) {
+        const AVBitStreamFilter *bsf =
+            av_bsf_get_by_name("h264_mp4toannexb");
+
+        if (!bsf || av_bsf_alloc(bsf, &ctx->annexb) < 0) {
+            cedar_warn("h264_mp4toannexb is not available");
+            ctx->annexb = NULL;
+            return AVERROR_DECODER_NOT_FOUND;
+        }
+        avcodec_parameters_from_context(ctx->annexb->par_in, avctx);
+        ctx->annexb->time_base_in = avctx->pkt_timebase;
+        if (av_bsf_init(ctx->annexb) < 0) {
+            cedar_warn("h264_mp4toannexb: init failed");
+            av_bsf_free(&ctx->annexb);
+            return AVERROR_EXTERNAL;
+        }
+    }
     cedar_note("decoder opened (%dx%d)", width,
            height);
     return 0;
@@ -527,6 +553,7 @@ static void cedar_close_decoder(AVCodecContext *avctx)
 {
     H264CedarContext *ctx = avctx->priv_data;
 
+    av_bsf_free(&ctx->annexb);
     if (!ctx->handle)
         return;
     /*
@@ -781,6 +808,35 @@ static int cedar_step(AVCodecContext *avctx, AVFrame *frame, int *got_picture)
     }
 }
 
+/*
+ * One packet through h264_mp4toannexb, then into the vendor parser. Returns
+ * the submit result, or AVERROR(EAGAIN) when the filter keeps the packet
+ * (a key frame that carries its parameter sets: the next call completes it).
+ */
+static int cedar_submit_packet(AVCodecContext *avctx, AVPacket *in)
+{
+    H264CedarContext *ctx = avctx->priv_data;
+    AVPacket *out = av_packet_alloc();
+    int ret;
+
+    if (!out)
+        return AVERROR(ENOMEM);
+    ret = av_bsf_send_packet(ctx->annexb, in);
+    if (ret < 0)
+        goto done;
+    while ((ret = av_bsf_receive_packet(ctx->annexb, out)) >= 0) {
+        ret = cedar_submit(avctx, out->data, out->size, out->pts);
+        av_packet_unref(out);
+        if (ret < 0)
+            break;
+    }
+    if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
+        ret = 0;
+done:
+    av_packet_free(&out);
+    return ret;
+}
+
 static int h264_cedar_decode(AVCodecContext *avctx, AVFrame *frame,
                              int *got_frame, AVPacket *avpkt)
 {
@@ -789,17 +845,32 @@ static int h264_cedar_decode(AVCodecContext *avctx, AVFrame *frame,
 
     *got_frame = 0;
 
+    if (cedar_failed) {
+        /* One error was reported; mpv counts them and falls back. */
+        return AVERROR_INVALIDDATA;
+    }
+
     if (avpkt->size == 0) {
-        /* Flush: one more access unit closes whatever the parser holds. */
+        /*
+         * End of stream. The parser closes the last frame when the next
+         * access unit starts, so give it an access unit delimiter (through
+         * the same filter, so it stays Annex-B) and take whatever came out.
+         * This must happen before the packet is considered consumed.
+         */
+        AVPacket aud = { 0 };
+
         if (!ctx->handle || ctx->eof_returned)
             return AVERROR_EOF;
         if (!ctx->flushed) {
-            static const uint8_t aud[] = { 0, 0, 0, 1, 0x09, 0xf0 };
+            static const uint8_t aud_data[] = { 0, 0, 0, 1, 0x09, 0xf0 };
 
             ctx->flushed = 1;
-            ret = cedar_submit(avctx, aud, sizeof(aud), CEDAR_AU_MARKER);
-            if (ret < 0)
-                return AVERROR_EOF;
+            if (av_new_packet(&aud, sizeof(aud_data)) >= 0) {
+                memcpy(aud.data, aud_data, sizeof(aud_data));
+                aud.pts = CEDAR_AU_MARKER;
+                cedar_submit_packet(avctx, &aud);
+                av_packet_unref(&aud);
+            }
         }
         cedar_step(avctx, frame, got_frame);
         if (!*got_frame) {
@@ -807,11 +878,6 @@ static int h264_cedar_decode(AVCodecContext *avctx, AVFrame *frame,
             return AVERROR_EOF;
         }
         return 0;
-    }
-
-    if (cedar_failed) {
-        /* One error was reported; mpv counts them and falls back. */
-        return AVERROR_INVALIDDATA;
     }
 
     if (!ctx->handle) {
@@ -832,10 +898,10 @@ static int h264_cedar_decode(AVCodecContext *avctx, AVFrame *frame,
         for (i = 0; i < n; i++)
             snprintf(hex + i * 3, 4, "%02x ", avpkt->data[i]);
         hex[n * 3] = 0;
-        cedar_note("first access unit, first %d bytes: %s", n, hex);
+        cedar_note("first packet, first %d bytes: %s", n, hex);
     }
 
-    ret = cedar_submit(avctx, avpkt->data, avpkt->size, avpkt->pts);
+    ret = cedar_submit_packet(avctx, avpkt);
     if (ret == AVERROR(ENOMEM)) {
         /* Stream buffer full: drop this one, the engine recovers at the
          * next key frame. */
@@ -845,6 +911,11 @@ static int h264_cedar_decode(AVCodecContext *avctx, AVFrame *frame,
     if (ret < 0) {
         cedar_failed = 1;
         return ret;
+    }
+    if (!ctx->submitted) {
+        /* Nothing reached the parser yet (the filter is still collecting a
+         * key frame): ask for the next packet. */
+        return AVERROR(EAGAIN);
     }
 
     /*

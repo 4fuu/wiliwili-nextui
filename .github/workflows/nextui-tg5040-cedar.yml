@@ -72,6 +72,9 @@ jobs:
       - name: Build wiliwili
         run: ./scripts/nextui/build-wiliwili.sh
 
+      - name: Build the on-device decode tester
+        run: ./scripts/nextui/cedar/build-decode
+
       - name: Package pak
         run: ./scripts/nextui/make-pak.sh
 
@@ -84,6 +87,8 @@ jobs:
             echo "- libmpv: $(pkg-config --modversion mpv)"
             echo "- pakz: $(du -h dist/WiliWili.pakz | cut -f1), sha256 $(sha256sum dist/WiliWili.pakz | cut -d' ' -f1)"
             echo "- h264_cedar in libavcodec: $(strings dist/WiliWili.pak/lib/libavcodec.so.60 | grep -c '^h264_cedar$') match(es)"
+            echo "- h264_mp4toannexb bsf: $(strings dist/WiliWili.pak/lib/libavcodec.so.60 | grep -c '^h264_mp4toannexb$') match(es)"
+            echo "- decode tester: $(ls -l dist/WiliWili.pak/bin/cedar-decode 2>/dev/null | awk '{print $5}') bytes"
             echo "- SemTimedWait exported by wiliwili: $(nm -D build-nextui/wiliwili | grep -c ' T SemTimedWait$')"
             echo "- glibc symbols needed by bin/wiliwili: $(readelf -V dist/WiliWili.pak/bin/wiliwili | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)"
             echo "- glibc symbols needed by libavcodec: $(readelf -V dist/WiliWili.pak/lib/libavcodec.so.60 | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)"
@@ -95,6 +100,8 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           # Fail early instead of shipping a pak without the decoder.
           strings dist/WiliWili.pak/lib/libavcodec.so.60 | grep -qx h264_cedar
+          strings dist/WiliWili.pak/lib/libavcodec.so.60 | grep -qx h264_mp4toannexb
+          test -x dist/WiliWili.pak/bin/cedar-decode
           # The pak binary is stripped, so check the linked one.
           nm -D build-nextui/wiliwili | grep -q ' T SemTimedWait$'
 

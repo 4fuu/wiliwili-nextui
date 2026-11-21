@@ -58,6 +58,13 @@ for soname in ld-linux-aarch64.so.1 libc.so.6 libc_malloc_debug.so.0 libm.so.6 \
     rm -f "$PAK/lib/$soname"
 done
 
+# On-device decode tester (bin/cedar-decode): runs the pak's own libavcodec
+# against an H.264 file from a shell, so a device problem can be reproduced
+# without the app. Built by scripts/nextui/cedar/build-decode.
+if [ -x "$ROOT/dist/cedar-decode" ]; then
+    install -m 755 "$ROOT/dist/cedar-decode" "$PAK/bin/cedar-decode"
+fi
+
 # CA bundle fallback. The launch script prefers the system bundle in
 # /mnt/SDCARD/.system/res/ca-bundle.crt and only uses this copy if that file is
 # missing.

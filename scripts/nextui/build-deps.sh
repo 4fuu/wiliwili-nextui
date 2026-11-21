@@ -195,6 +195,7 @@ build_ffmpeg() {
         --enable-protocol=file,http,https,tcp,udp,hls,tls,httpproxy,data,concat,crypto \
         --disable-filters \
         --enable-filter=format,scale,fps,crop,pad,transpose,hflip,vflip,aresample,anull,atrim,asetpts,setpts \
+        --enable-bsf=h264_mp4toannexb \
         $FFMPEG_CONFIGURE_EXTRA \
         $(for c in $FFMPEG_EXTRA_COMPONENTS; do printf -- '--enable-%s ' "$c"; done)
     make -j "$JOBS"
