@@ -689,6 +689,10 @@ void SettingActivity::onContentAvailable() {
                        ProgramConfig::instance().setSettingItem(SettingItem::PLAYER_HWDEC, value);
                        if (MPVCore::HARDWARE_DEC == value) return;
                        MPVCore::HARDWARE_DEC = value;
+#ifdef NEXTUI_TG5040
+                       // CedarX 解码器不是 mpv hwdec，重启 MPV 时同步切换
+                       MPVCore::CEDAR_DEC = value;
+#endif
                        MPVCore::instance().restart();
                    });
 #endif

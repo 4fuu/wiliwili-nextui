@@ -688,6 +688,11 @@ void ProgramConfig::load() {
 
     // 初始化自定义的硬件加速方案
     MPVCore::PLAYER_HWDEC_METHOD = getSettingItem(SettingItem::PLAYER_HWDEC_CUSTOM, MPVCore::PLAYER_HWDEC_METHOD);
+#ifdef NEXTUI_TG5040
+    // tg5040 的厂商解码器不是 mpv hwdec：打开「硬件解码」开关即尝试
+    // CedarX (h264_cedar)，不可用时在 mpv_cedar.hpp 中自动回落到软解。
+    MPVCore::CEDAR_DEC = MPVCore::HARDWARE_DEC;
+#endif
 
     // 播放结束时自动退出全屏
     VideoView::EXIT_FULLSCREEN_ON_END = getBoolOption(SettingItem::PLAYER_EXIT_FULLSCREEN_ON_END);

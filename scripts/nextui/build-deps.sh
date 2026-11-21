@@ -34,6 +34,10 @@ LIBASS_VERSION=0.17.5
 HARFBUZZ_VERSION=7.3.0
 FRIBIDI_VERSION=1.0.16
 
+FFMPEG_EXTRA_SRC=${FFMPEG_EXTRA_SRC:-}
+FFMPEG_EXTRA_COMPONENTS=${FFMPEG_EXTRA_COMPONENTS:-}
+FFMPEG_CONFIGURE_EXTRA=${FFMPEG_CONFIGURE_EXTRA:-}
+
 mkdir -p "$SRC" "$BUILD"
 
 export PKG_CONFIG_SYSROOT_DIR="$SYSROOT"
@@ -154,6 +158,26 @@ build_ffmpeg() {
         "ffmpeg-$FFMPEG_VERSION.tar.xz" \
         8684f4b00f94b85461884c3719382f1261f0d9eb3d59640a1f4ac0873616f968
     unpack "ffmpeg-$FFMPEG_VERSION.tar.xz" "ffmpeg-$FFMPEG_VERSION"
+    # Extra decoders, off unless FFMPEG_EXTRA_COMPONENTS lists them. Each
+    # FFMPEG_EXTRA_SRC is a complete file copied into libavcodec/ (its
+    # contents are the patch, so a change to it is a one-file diff); the
+    # Makefile and allcodecs.c entries are added here.
+    for f in ${FFMPEG_EXTRA_SRC:-}; do
+        echo "==> add libavcodec/$(basename "$f")"
+        cp "$f" "$SRC/ffmpeg-$FFMPEG_VERSION/libavcodec/$(basename "$f")"
+    done
+    case " $FFMPEG_EXTRA_COMPONENTS " in
+    *" decoder=h264_cedar "*)
+        (
+            cd "$SRC/ffmpeg-$FFMPEG_VERSION"
+            sed -i 's/^OBJS-\$(CONFIG_H264_DECODER)            += h264dec.o/OBJS-$(CONFIG_H264_CEDAR_DECODER)      += h264_cedardec.o\n&/' libavcodec/Makefile
+            sed -i 's/^extern const FFCodec ff_h264_crystalhd_decoder;/extern const FFCodec ff_h264_cedar_decoder;\n&/' libavcodec/allcodecs.c
+            grep -q 'CONFIG_H264_CEDAR_DECODER' libavcodec/Makefile &&
+                grep -q 'ff_h264_cedar_decoder' libavcodec/allcodecs.c ||
+                { echo "build-deps: FFmpeg sources do not match the h264_cedar hook" >&2; exit 1; }
+        )
+        ;;
+    esac
     mkdir -p "$BUILD/ffmpeg"
     cd "$BUILD/ffmpeg"
     "$SRC/ffmpeg-$FFMPEG_VERSION/configure" \
@@ -170,7 +194,9 @@ build_ffmpeg() {
         --disable-protocols \
         --enable-protocol=file,http,https,tcp,udp,hls,tls,httpproxy,data,concat,crypto \
         --disable-filters \
-        --enable-filter=format,scale,fps,crop,pad,transpose,hflip,vflip,aresample,anull,atrim,asetpts,setpts
+        --enable-filter=format,scale,fps,crop,pad,transpose,hflip,vflip,aresample,anull,atrim,asetpts,setpts \
+        $FFMPEG_CONFIGURE_EXTRA \
+        $(for c in $FFMPEG_EXTRA_COMPONENTS; do printf -- '--enable-%s ' "$c"; done)
     make -j "$JOBS"
     make DESTDIR="$SYSROOT" install
     cd "$ROOT"

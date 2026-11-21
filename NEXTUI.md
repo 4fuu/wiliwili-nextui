@@ -27,11 +27,16 @@ The only community material consulted was the build *approach*; every binary in
 
 ## Known limits
 
-- **No hardware video decode.** The BSP exposes no FFmpeg-usable decoder, so the
-  port is software-only. 480p is solid, 720p30 is usable, 1080p is not. The
-  build caps landscape quality at 720P (64) and portrait at 480P (32); the
-  default is 720P. `PLAYER_LOW_QUALITY` is on by default in wiliwili and skips
-  the loop filter, which matters a lot on this SoC.
+- **Hardware video decode is opt-in and H.264 only.** The default build is
+  software-only (480p solid, 720p30 usable, 1080p not). The opt-in CedarX
+  build (`nextui-tg5040-cedar.yml`, see `scripts/nextui/cedar/README.md`)
+  adds the `h264_cedar` FFmpeg decoder, which drives the device's vendor
+  decoder; turn on "hardware decode" in Settings → Playback to use it. It
+  falls back to software when the vendor decoder is unavailable. HEVC is not
+  wired up. Either way the build caps landscape quality at 720P (64) and
+  portrait at 480P (32); the default is 720P. `PLAYER_LOW_QUALITY` is on by
+  default in wiliwili and skips the loop filter, which matters a lot for the
+  software decoder on this SoC.
 - **No on-screen keyboard.** QR login works; text search, comments, password
   login and other text entry do not. This is a platform limitation, not a bug in
   the port.

@@ -14,6 +14,7 @@
 #include "utils/crash_helper.hpp"
 #include "utils/ca_bundle.hpp"
 #include "view/mpv_core.hpp"
+#include "view/mpv_cedar.hpp"
 
 #ifdef MPV_BUNDLE_DLL
 mpvSetOptionStringFunc mpvSetOptionString;
@@ -38,6 +39,9 @@ mpvRenderContextReportSwapFunc mpvRenderContextReportSwap;
 mpvRenderContextUpdateFunc mpvRenderContextUpdate;
 mpvRenderContextFreeFunc mpvRenderContextFree;
 mpvClientApiVersionFunc mpvClientApiVersion;
+#ifdef NEXTUI_TG5040
+mpvCommandFunc mpvCommand;
+#endif
 #endif
 
 #ifdef MPV_USE_FB
@@ -260,6 +264,9 @@ void initMpvProc(Module dll, fnGetProcAddress pGetProcAddress) {
         (mpvRenderContextSetUpdateCallbackFunc)pGetProcAddress(dll, "mpv_render_context_set_update_callback");
     mpvRenderContextReportSwap = (mpvRenderContextReportSwapFunc)pGetProcAddress(dll, "mpv_render_context_report_swap");
     mpvClientApiVersion        = (mpvClientApiVersionFunc)pGetProcAddress(dll, "mpv_client_api_version");
+#ifdef NEXTUI_TG5040
+    mpvCommand                 = (mpvCommandFunc)pGetProcAddress(dll, "mpv_command");
+#endif
 }
 #endif
 
@@ -364,7 +371,10 @@ void MPVCore::init() {
     }
 
     // hardware decoding
-    if (HARDWARE_DEC) {
+    if (CEDAR_DEC) {
+        // 解码器由 FFmpeg 提供，mpv 不需要 hwdec；每个文件加载前再选择解码器
+        mpvSetOptionString(mpv, "hwdec", "no");
+    } else if (HARDWARE_DEC) {
         mpvSetOptionString(mpv, "hwdec", PLAYER_HWDEC_METHOD.c_str());
         brls::Logger::info("MPV hardware decode: {}", PLAYER_HWDEC_METHOD);
     } else {
@@ -1181,6 +1191,9 @@ void MPVCore::reset() {
 
 void MPVCore::setUrl(const std::string &url, const std::string &extra, const std::string &method) {
     brls::Logger::debug("{} Url: {}, extra: {}", method, url, extra);
+#ifdef NEXTUI_TG5040
+    if (CEDAR_DEC) MpvCedarDecoder::selectDecoder();
+#endif
     if (extra.empty()) {
         command_async("loadfile", url, method);
     } else {

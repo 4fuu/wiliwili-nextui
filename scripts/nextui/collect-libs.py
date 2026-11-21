@@ -25,6 +25,7 @@ import sys
 DEFAULT_ALLOWLIST = """\
 ld-linux-aarch64.so.1
 libc.so.6
+libc_malloc_debug.so.0
 libm.so.6
 libdl.so.2
 libpthread.so.0
