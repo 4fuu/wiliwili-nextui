@@ -56,6 +56,7 @@ printf 'GROUP ( %s )\n' "$BOOT_SYSROOT/lib/libm.so.6" >"$CACHE/lib/libm.so"
 # the libraries the scripts name so both resolve to the same files.
 for lib in libc libpthread libm; do
     for dir in "$SYSROOT/lib" "$SYSROOT/usr/lib" "$VENDOR_ROOT/$CROSS_TRIPLE/libc/lib" "$VENDOR_ROOT/$CROSS_TRIPLE/libc/usr/lib"; do
+        [ -d "$dir" ] || continue
         if [ -e "$dir/$lib.so" ] && [ ! -e "$dir/$lib.so.vendor" ]; then
             mv "$dir/$lib.so" "$dir/$lib.so.vendor"
         fi
@@ -64,6 +65,7 @@ for lib in libc libpthread libm; do
 done
 for so in libc.so.6 libpthread.so.0 libm.so.6; do
     for dir in "$SYSROOT/lib" "$SYSROOT/usr/lib" "$VENDOR_ROOT/$CROSS_TRIPLE/libc/lib"; do
+        [ -d "$dir" ] || continue
         if [ -e "$dir/$so" ] && [ ! -e "$dir/$so.vendor" ]; then
             mv "$dir/$so" "$dir/$so.vendor"
         fi
@@ -75,7 +77,13 @@ done
 # CMake find the sysroot and compiler through them, and make-pak.sh stages
 # libstdc++/libgcc_s from $CROSS_TRIPLE-g++ out of that sysroot. Only the C
 # library and ld come from Bootlin (prepended to PATH).
+echo "export CEDAR_TOOLCHAIN_DIR=$CACHE"
 echo "export PATH=$BOOT/bin:$VENDOR_BIN:\$PATH"
-echo "export CFLAGS=\"-L$CACHE/lib\""
-echo "export CXXFLAGS=\"-L$CACHE/lib\""
-echo "export LDFLAGS=\"-Wl,--allow-multiple-definition -L$CACHE/lib\""
+echo "export CEDAR_CFLAGS=\"-L$CACHE/lib\""
+echo "export CEDAR_CXXFLAGS=\"-L$CACHE/lib\""
+echo "export CEDAR_LDFLAGS=\"-Wl,--allow-multiple-definition -L$CACHE/lib\""
+# Also export them under the names build tools read, unless the caller
+# already set those (an empty value still counts as set: the GitHub job does).
+echo "export CFLAGS=\"\${CFLAGS:-\$CEDAR_CFLAGS}\""
+echo "export CXXFLAGS=\"\${CXXFLAGS:-\$CEDAR_CXXFLAGS}\""
+echo "export LDFLAGS=\"\${LDFLAGS:-\$CEDAR_LDFLAGS}\""

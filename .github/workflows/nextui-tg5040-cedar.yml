@@ -49,10 +49,13 @@ jobs:
       - name: Toolchain (vendor SDK + Bootlin glibc 2.31 C library and linker)
         run: |
           eval "$(./scripts/nextui/cedar/toolchain.sh)"
+          # Under names of their own: a CFLAGS/CXXFLAGS/LDFLAGS written to
+          # $GITHUB_ENV overrides the flags inside CMake's toolchain file.
           echo "PATH=$PATH" >> "$GITHUB_ENV"
-          echo "CFLAGS=$CFLAGS" >> "$GITHUB_ENV"
-          echo "CXXFLAGS=$CXXFLAGS" >> "$GITHUB_ENV"
-          echo "LDFLAGS=$LDFLAGS" >> "$GITHUB_ENV"
+          echo "CEDAR_TOOLCHAIN_DIR=$CEDAR_TOOLCHAIN_DIR" >> "$GITHUB_ENV"
+          echo "CEDAR_CFLAGS=$CEDAR_CFLAGS" >> "$GITHUB_ENV"
+          echo "CEDAR_CXXFLAGS=$CEDAR_CXXFLAGS" >> "$GITHUB_ENV"
+          echo "CEDAR_LDFLAGS=$CEDAR_LDFLAGS" >> "$GITHUB_ENV"
           aarch64-buildroot-linux-gnu-gcc --version | head -1
           aarch64-buildroot-linux-gnu-ld --version | head -1
 
@@ -63,7 +66,7 @@ jobs:
           key: nextui-deps-src-cedar-${{ hashFiles('scripts/nextui/build-deps.sh', 'scripts/nextui/ffmpeg/h264_cedardec.c') }}
 
       - name: Build dependencies (FFmpeg with h264_cedar, libmpv, libass)
-        run: ./scripts/nextui/build-deps.sh
+        run: CFLAGS="$CEDAR_CFLAGS" CXXFLAGS="$CEDAR_CXXFLAGS" LDFLAGS="$CEDAR_LDFLAGS" ./scripts/nextui/build-deps.sh
 
       - name: Build wiliwili
         run: ./scripts/nextui/build-wiliwili.sh
