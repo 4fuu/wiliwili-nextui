@@ -2,7 +2,7 @@
 # Sets up the tg5040 cross toolchain for a full wiliwili build (see
 # nextui-tg5040-cedar.yml):
 #
-#   . ./scripts/nextui/cedar/toolchain.sh
+#   eval "$(./scripts/nextui/cedar/toolchain.sh)"
 #
 # Why not the vendor SDK alone: its Linaro 7.5 sysroot has glibc 2.25, which
 # has no sem_clockwait() that libavcodec (via libmpv) needs, and ld 2.34 has

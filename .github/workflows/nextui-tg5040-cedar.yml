@@ -48,7 +48,7 @@ jobs:
 
       - name: Toolchain (vendor SDK + Bootlin glibc 2.31 C library and linker)
         run: |
-          . ./scripts/nextui/cedar/toolchain.sh
+          eval "$(./scripts/nextui/cedar/toolchain.sh)"
           echo "PATH=$PATH" >> "$GITHUB_ENV"
           echo "CFLAGS=$CFLAGS" >> "$GITHUB_ENV"
           echo "CXXFLAGS=$CXXFLAGS" >> "$GITHUB_ENV"
