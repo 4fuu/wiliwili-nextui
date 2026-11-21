@@ -30,6 +30,9 @@ BOOT="$CACHE/$BOOTLIN"
 BOOT_SYSROOT="$BOOT/aarch64-buildroot-linux-gnu/sysroot"
 VENDOR_BIN=$(dirname "$(command -v "$CROSS_TRIPLE-gcc")")
 
+# Bootlin's ld (2.33) cannot --export-dynamic-symbol, so libsbm binds to
+# SemTimedWait through -Wl,-E on wiliwili (CMakeLists.txt, NEXTUI_TG5040).
+#
 # Every link goes through these: Bootlin's glibc 2.31 (the one the compiler
 # was built against) together with the C library's startup objects from the
 # vendor sysroot, which also produced the program's crt objects. Both sides
