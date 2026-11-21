@@ -234,6 +234,15 @@ set_source_files_properties(
         wiliwili/source/activity/dlna_activity.cpp
         PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 
+if (NEXTUI_TG5040)
+    # The CedarX vendor parser binds SemTimedWait at run time; its blocking
+    # replacement is C (scripts/nextui/cedar/src/cedar_sync.c), compiled
+    # with the project's own warning settings.
+    target_sources(${PROJECT_NAME} PRIVATE scripts/nextui/cedar/src/cedar_sync.c)
+    target_include_directories(${PROJECT_NAME} PRIVATE scripts/nextui/cedar/src)
+    target_link_libraries(${PROJECT_NAME} PRIVATE ${CMAKE_DL_LIBS})
+endif ()
+
 # building release file
 if (PLATFORM_DESKTOP)
     # Copy resources to build dir

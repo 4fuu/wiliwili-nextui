@@ -33,23 +33,37 @@ VENDOR_BIN=$(dirname "$(command -v "$CROSS_TRIPLE-gcc")")
 # Every link goes through these: Bootlin's glibc 2.31 (the one the compiler
 # was built against) together with the C library's startup objects from the
 # vendor sysroot, which also produced the program's crt objects. Both sides
-# define a few symbols, hence --allow-multiple-definition.
+# define a few symbols, hence --allow-multiple-definition. libm is Bootlin's
+# outright: the vendor's 2.25 libm lacks pow@GLIBC_2.29 that libmpv uses.
 mkdir -p "$CACHE/lib"
 printf 'GROUP ( %s )\n' \
     "$BOOT_SYSROOT/lib/libc.so.6 $BOOT_SYSROOT/lib/ld-linux-aarch64.so.1" \
     "AS_NEEDED ( $BOOT_SYSROOT/usr/lib/libc_nonshared.a )" >"$CACHE/lib/libc.so"
+# The shared libs under $SYSROOT/usr/lib (OpenSSL, SDL2) NEED libpthread.so.0,
+# so the script must carry that SONAME; otherwise ld records the path.
 printf 'GROUP ( %s )\n' \
-    "$BOOT_SYSROOT/lib/libpthread.so.0 $BOOT_SYSROOT/lib/libc.so.6" >"$CACHE/lib/libpthread.so"
+    "$BOOT_SYSROOT/lib/libpthread.so.0 $BOOT_SYSROOT/lib/libc.so.6" \
+    >"$CACHE/lib/libpthread.so"
+printf 'GROUP ( %s )\n' "$BOOT_SYSROOT/lib/libm.so.6" >"$CACHE/lib/libm.so"
 
-# The vendor sysroot's own libc.so/libpthread.so scripts would send us back to
-# its glibc 2.25, and its -L directories are searched before ours. Replace
-# both with the scripts above.
-for lib in libc libpthread; do
+# The vendor sysroot's libc.so/libpthread.so scripts would send us back to its
+# glibc 2.25, and its -L directories are searched before ours. Replace both
+# with the scripts above, and point the libc.so.6/libpthread.so.0 symlinks at
+# the libraries the scripts name so both resolve to the same files.
+for lib in libc libpthread libm; do
     for dir in "$SYSROOT/lib" "$SYSROOT/usr/lib"; do
         if [ -e "$dir/$lib.so" ] && [ ! -e "$dir/$lib.so.vendor" ]; then
             mv "$dir/$lib.so" "$dir/$lib.so.vendor"
         fi
         ln -sf "$CACHE/lib/$lib.so" "$dir/$lib.so"
+    done
+done
+for so in libc.so.6 libpthread.so.0 libm.so.6; do
+    for dir in "$SYSROOT/lib" "$SYSROOT/usr/lib"; do
+        if [ -e "$dir/$so" ] && [ ! -e "$dir/$so.vendor" ]; then
+            mv "$dir/$so" "$dir/$so.vendor"
+        fi
+        ln -sf "$BOOT_SYSROOT/lib/$so" "$dir/$so"
     done
 done
 
