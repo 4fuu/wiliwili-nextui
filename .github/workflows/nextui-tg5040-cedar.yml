@@ -48,7 +48,8 @@ jobs:
 
       - name: Toolchain (vendor SDK + Bootlin glibc 2.31 C library and linker)
         run: |
-          eval "$(./scripts/nextui/cedar/toolchain.sh)"
+          sh ./scripts/nextui/cedar/toolchain.sh > /tmp/cedar-env.sh
+          . /tmp/cedar-env.sh
           # Under names of their own: a CFLAGS/CXXFLAGS/LDFLAGS written to
           # $GITHUB_ENV overrides the flags inside CMake's toolchain file.
           echo "PATH=$PATH" >> "$GITHUB_ENV"
