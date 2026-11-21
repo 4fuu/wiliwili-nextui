@@ -80,7 +80,7 @@ jobs:
             echo "- libmpv: $(pkg-config --modversion mpv)"
             echo "- pakz: $(du -h dist/WiliWili.pakz | cut -f1), sha256 $(sha256sum dist/WiliWili.pakz | cut -d' ' -f1)"
             echo "- h264_cedar in libavcodec: $(strings dist/WiliWili.pak/lib/libavcodec.so.60 | grep -c '^h264_cedar$') match(es)"
-            echo "- SemTimedWait exported by bin/wiliwili: $(nm -D dist/WiliWili.pak/bin/wiliwili | grep -c ' T SemTimedWait$')"
+            echo "- SemTimedWait exported by wiliwili: $(nm -D build-nextui/wiliwili | grep -c ' T SemTimedWait$')"
             echo "- glibc symbols needed by bin/wiliwili: $(readelf -V dist/WiliWili.pak/bin/wiliwili | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)"
             echo "- glibc symbols needed by libavcodec: $(readelf -V dist/WiliWili.pak/lib/libavcodec.so.60 | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)"
             echo
@@ -91,9 +91,11 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           # Fail early instead of shipping a pak without the decoder.
           strings dist/WiliWili.pak/lib/libavcodec.so.60 | grep -qx h264_cedar
-          nm -D dist/WiliWili.pak/bin/wiliwili | grep -q ' T SemTimedWait$'
+          # The pak binary is stripped, so check the linked one.
+          nm -D build-nextui/wiliwili | grep -q ' T SemTimedWait$'
 
       - name: Upload pakz
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: WiliWili-tg5040-cedar-pakz
