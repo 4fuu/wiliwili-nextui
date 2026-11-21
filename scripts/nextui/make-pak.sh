@@ -60,7 +60,7 @@ done
 
 # On-device decode tester (bin/cedar-decode): runs the pak's own libavcodec
 # against an H.264 file from a shell, so a device problem can be reproduced
-# without the app. Built by scripts/nextui/cedar/build-tester.
+# without the app. Built by scripts/nextui/cedar/make-tester.
 if [ -x "$ROOT/dist/cedar-decode" ]; then
     install -m 755 "$ROOT/dist/cedar-decode" "$PAK/bin/cedar-decode"
 fi
