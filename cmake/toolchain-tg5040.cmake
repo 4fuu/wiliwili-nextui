@@ -51,6 +51,16 @@ set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
 set(CMAKE_C_FLAGS_INIT "-mcpu=cortex-a53 -I${TG5040_CROSS_ROOT}/include")
 set(CMAKE_CXX_FLAGS_INIT "-mcpu=cortex-a53 -I${TG5040_CROSS_ROOT}/include")
 
+# scripts/nextui/cedar/toolchain.sh puts glibc 2.31 (Bootlin) link scripts in
+# $CEDAR_TOOLCHAIN_DIR/lib, because the vendor sysroot's glibc 2.25 lacks
+# sem_clockwait and pow@GLIBC_2.29. Nothing else points at that directory.
+if(DEFINED ENV{CEDAR_TOOLCHAIN_DIR} AND EXISTS "$ENV{CEDAR_TOOLCHAIN_DIR}/lib/libc.so")
+    set(CEDAR_LIB_DIR "$ENV{CEDAR_TOOLCHAIN_DIR}/lib")
+    set(CMAKE_C_FLAGS_INIT "${CMAKE_C_FLAGS_INIT} -L${CEDAR_LIB_DIR}")
+    set(CMAKE_CXX_FLAGS_INIT "${CMAKE_CXX_FLAGS_INIT} -L${CEDAR_LIB_DIR}")
+    set(CMAKE_EXE_LINKER_FLAGS_INIT "${CMAKE_EXE_LINKER_FLAGS_INIT} -Wl,--allow-multiple-definition -L${CEDAR_LIB_DIR}")
+endif ()
+
 # pkg-config must look inside the sysroot; the image already sets these, but
 # setting them here keeps the file usable from a plain container shell.
 set(ENV{PKG_CONFIG_SYSROOT_DIR} "${TG5040_SYSROOT}")
