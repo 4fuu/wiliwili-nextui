@@ -73,7 +73,7 @@ jobs:
         run: ./scripts/nextui/build-wiliwili.sh
 
       - name: Build the on-device decode tester
-        run: ./scripts/nextui/cedar/build-decode
+        run: ./scripts/nextui/cedar/build-tester
 
       - name: Package pak
         run: ./scripts/nextui/make-pak.sh
