@@ -517,6 +517,19 @@ static void cedar_close_decoder(AVCodecContext *avctx)
     ctx->handle = NULL;
 }
 
+/*
+ * The vendor parser aborts on AV_NOPTS_VALUE (INT64_MIN): libawh264 asserts on
+ * it instead of ignoring it. Every submitted access unit gets a real pts, a
+ * monotonic microsecond counter (as tsp-videotest uses) when the packet has
+ * none.
+ */
+static int64_t cedar_pts(H264CedarContext *ctx, int64_t pts)
+{
+    if (pts != AV_NOPTS_VALUE && pts > INT64_MIN / 2)
+        return pts;
+    return (int64_t)ctx->submitted * 1000000 / 60;
+}
+
 static int cedar_submit(AVCodecContext *avctx, const uint8_t *data, int size,
                         int64_t pts)
 {
@@ -540,6 +553,7 @@ static int cedar_submit(AVCodecContext *avctx, const uint8_t *data, int size,
         memcpy(ring, data + buf_size, size - buf_size);
     }
 
+    pts = cedar_pts(ctx, pts);
     if (!ctx->submitted)
         cedar_note("first SubmitVideoStreamData: %d bytes, pts %lld", size,
                    (long long)pts);
@@ -693,7 +707,7 @@ static int cedar_run(AVCodecContext *avctx, AVFrame *frame, int *got_picture)
              * reordering. ff_decode_frame_props() kept that value.
              */
             if (!ret && pic->nPts != AV_NOPTS_VALUE &&
-                pic->nPts != CEDAR_AU_MARKER)
+                pic->nPts != CEDAR_AU_MARKER && pic->nPts > INT64_MIN / 2)
                 frame->pts = pic->nPts;
             if (ret < 0)
                 cedar_note("picture %d could not be copied\n", pic->nID);
