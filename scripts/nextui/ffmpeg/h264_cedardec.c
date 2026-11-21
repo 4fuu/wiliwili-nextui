@@ -794,10 +794,12 @@ static int cedar_step(AVCodecContext *avctx, AVFrame *frame, int *got_picture)
     case CEDAR_RESULT_NO_BITSTREAM:
     case CEDAR_RESULT_CONTINUE:
     case CEDAR_RESULT_OK:
-        /* The parser has not closed a frame yet: feed it more. */
-        return AVERROR(EAGAIN);
     case CEDAR_RESULT_NO_FRAME_BUFFER:
-        return AVERROR(EAGAIN);
+        /*
+         * The parser has not closed a frame yet. Not an error: the caller
+         * consumes the packet and libavcodec feeds the next one.
+         */
+        return 0;
     case CEDAR_RESULT_RESOLUTION_CHANGE:
         /* Not recoverable in place: mpv counts this and falls back. */
         cedar_warn("resolution change");
@@ -872,7 +874,10 @@ static int h264_cedar_decode(AVCodecContext *avctx, AVFrame *frame,
                 av_packet_unref(&aud);
             }
         }
-        cedar_step(avctx, frame, got_frame);
+        if (cedar_step(avctx, frame, got_frame) < 0) {
+            cedar_failed = 1;
+            return AVERROR_INVALIDDATA;
+        }
         if (!*got_frame) {
             ctx->eof_returned = 1;
             return AVERROR_EOF;
@@ -881,9 +886,20 @@ static int h264_cedar_decode(AVCodecContext *avctx, AVFrame *frame,
     }
 
     if (!ctx->handle) {
-        int width  = avctx->coded_width  > 0 ? avctx->coded_width  : 1920;
-        int height = avctx->coded_height > 0 ? avctx->coded_height : 1080;
+        /*
+         * The vendor engine sizes its buffers at InitializeVideoDecoder and
+         * cannot change them later, so the picture size must be the real
+         * one. ff_set_dimensions() was fed the parsed SPS (avctx->width and
+         * height); coded_width/height may still be 0 and must not become a
+         * guess such as 1920x1080.
+         */
+        int width  = avctx->width  > 0 ? avctx->width  : avctx->coded_width;
+        int height = avctx->height > 0 ? avctx->height : avctx->coded_height;
 
+        if (width <= 0 || height <= 0) {
+            cedar_warn("no picture size yet (%dx%d), deferring", width, height);
+            return avpkt->size;
+        }
         ret = cedar_open_decoder(avctx, width, height);
         if (ret < 0) {
             cedar_failed = 1;
@@ -912,25 +928,21 @@ static int h264_cedar_decode(AVCodecContext *avctx, AVFrame *frame,
         cedar_failed = 1;
         return ret;
     }
-    if (!ctx->submitted) {
-        /* Nothing reached the parser yet (the filter is still collecting a
-         * key frame): ask for the next packet. */
-        return AVERROR(EAGAIN);
-    }
-
     /*
-     * One decode call, then report. A real error is returned as an error
-     * (libavcodec asserts that a decode callback never returns EAGAIN);
-     * "needs more input" is the only thing that becomes EAGAIN, which asks
-     * libavcodec for the next packet instead of spinning here.
+     * This is an FF_CODEC_DECODE_CB decoder: the return value is the number
+     * of consumed bytes or a negative error, never AVERROR(EAGAIN)
+     * (decode_simple_internal asserts on that). "Needs more input" is
+     * therefore a consumed packet with no frame, and libavcodec feeds the
+     * next one by itself.
      */
-    ret = cedar_step(avctx, frame, got_frame);
-    if (*got_frame)
-        return avpkt->size;
-    if (ret == AVERROR(EAGAIN))
-        return ret;
-    cedar_failed = 1;
-    return ret;
+    if (ctx->submitted) {
+        ret = cedar_step(avctx, frame, got_frame);
+        if (ret < 0) {
+            cedar_failed = 1;
+            return ret;
+        }
+    }
+    return avpkt->size;
 }
 
 static av_cold int h264_cedar_init(AVCodecContext *avctx)

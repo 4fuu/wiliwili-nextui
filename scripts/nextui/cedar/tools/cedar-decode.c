@@ -26,7 +26,9 @@
 #include <unistd.h>
 
 #include <libavcodec/avcodec.h>
+#include <libavcodec/bsf.h>
 #include <libavutil/imgutils.h>
+#include <libavutil/mem.h>
 
 /* One access unit per Annex-B start code sequence, AUD not required. */
 struct au {
@@ -69,50 +71,48 @@ static int is_start_code(const uint8_t *p, const uint8_t *end, int *len)
     return 0;
 }
 
-/* Splits at access unit delimiters when present, else at SPS/PPS/slice NALs. */
+/*
+ * One packet per picture. An access unit delimiter starts a new picture; a
+ * stream without AUDs splits where a slice follows another slice. Parameter
+ * sets and SEI stay attached to the picture that follows them, because the
+ * vendor parser needs them in the same packet.
+ */
 static size_t split_aus(const uint8_t *data, size_t len, struct au **out)
 {
     const uint8_t *end = data + len;
-    const uint8_t *p = data;
-    size_t n = 0, cap = 1024;
-    struct au *aus = malloc(cap * sizeof(*aus));
-    const uint8_t *start = NULL;
-    int have_aud = 0;
+    const uint8_t *p, *start = data, *slice_seen = NULL;
+    struct au *aus = malloc(1024 * sizeof(*aus));
+    size_t n = 0;
 
     for (p = data; p < end; p++) {
         int sc;
 
         if (!is_start_code(p, end, &sc))
             continue;
-        if (p + sc < end && (p[sc] & 0x1f) == 9)
-            have_aud = 1;
-        p += sc - 1;
-    }
-    for (p = data; p < end; p++) {
-        int sc, type;
-
-        if (!is_start_code(p, end, &sc))
-            continue;
         if (p + sc >= end)
             break;
-        type = p[sc] & 0x1f;
-        /* A new AU starts at an AUD, or (without AUDs) at SPS/PPS/IDR/slice
-         * after a slice has already been seen. */
-        if (have_aud ? type == 9 : (type == 7 || type == 8 || type == 5)) {
-            if (start) {
-                if (n == cap) {
-                    cap *= 2;
-                    aus = realloc(aus, cap * sizeof(*aus));
-                }
+        {
+            int type = p[sc] & 0x1f;
+            int new_picture = 0;
+
+            if (type == 9 && p > start)
+                new_picture = 1;           /* access unit delimiter */
+            else if ((type == 1 || type == 5) && slice_seen)
+                new_picture = 1;           /* next picture without AUDs */
+
+            if (new_picture) {
                 aus[n].data = start;
                 aus[n].size = (size_t)(p - start);
                 n++;
+                start = p;
+                slice_seen = NULL;
             }
-            start = p;
+            if (type == 1 || type == 5)
+                slice_seen = p;
         }
         p += sc - 1;
     }
-    if (start) {
+    if (start < end) {
         aus[n].data = start;
         aus[n].size = (size_t)(end - start);
         n++;
@@ -121,14 +121,73 @@ static size_t split_aus(const uint8_t *data, size_t len, struct au **out)
     return n;
 }
 
-static void hex_head(const uint8_t *p, size_t n)
+/*
+ * AVCC: every NAL unit is a 4-byte big-endian length. A file that does not
+ * start with a start code and whose first length lands on a plausible NAL
+ * unit type is AVCC.
+ */
+static int is_avcc(const uint8_t *data, size_t len)
+{
+    size_t l;
+    int type;
+
+    if (len < 5 || data[0] != 0 || data[1] != 0 || data[2] != 0)
+        return 0;
+    l = ((size_t)data[0] << 24) | ((size_t)data[1] << 16) |
+        ((size_t)data[2] << 8) | data[3];
+    if (l == 0 || l == 1 || l > len - 4)
+        return 0;
+    type = data[4] & 0x1f;
+    return type >= 1 && type <= 12;
+}
+
+/* H.264 NAL types the vendor plugin understands; HEVC has no AUD of type 9. */
+static int is_h264(const uint8_t *au, size_t size)
 {
     size_t i;
 
-    for (i = 0; i < n && i < 32; i++)
-        fprintf(stderr, "%02x ", p[i]);
-    fputc('\n', stderr);
+    for (i = 0; i + 4 < size; i++) {
+        if (au[i] == 0 && au[i + 1] == 0 && au[i + 2] == 1) {
+            int type = au[i + 3] & 0x1f;
+
+            return type == 1 || type == 5 || type == 7 || type == 8 ||
+                   type == 9;
+        }
+    }
+    return 0;
 }
+
+/*
+ * AVCC to Annex-B by hand: every NAL unit is a 4-byte length, and every
+ * start code is four bytes. The app path gets this from h264_mp4toannexb,
+ * which needs the container's avcC extradata; a bare payload has none.
+ */
+static uint8_t *avcc_to_annexb(const uint8_t *data, size_t len, size_t *out_len)
+{
+    uint8_t *out = av_malloc(len + 1024);
+    size_t off = 0, used = 0;
+
+    if (!out)
+        return NULL;
+    while (off + 4 <= len) {
+        size_t l = ((size_t)data[off] << 24) | ((size_t)data[off + 1] << 16) |
+                   ((size_t)data[off + 2] << 8) | data[off + 3];
+
+        if (l == 0 || off + 4 + l > len)
+            break;
+        out[used++] = 0;
+        out[used++] = 0;
+        out[used++] = 0;
+        out[used++] = 1;
+        memcpy(out + used, data + off + 4, l);
+        used += l;
+        off += 4 + l;
+    }
+    *out_len = used;
+    return out;
+}
+
+static int g_width, g_height;
 
 int main(int argc, char **argv)
 {
@@ -162,6 +221,17 @@ int main(int argc, char **argv)
         perror(argv[optind]);
         return 1;
     }
+    if (!quiet) {
+        size_t k;
+
+        fprintf(stderr, "cedar-decode: first bytes of the file: ");
+        for (k = 0; k < len && k < 32; k++)
+            fprintf(stderr, "%02x ", data[k]);
+        fputc('\n', stderr);
+    }
+    fprintf(stderr, "cedar-decode: %s input\n",
+            is_avcc(data, len) ? "AVCC (length-prefixed NAL units)"
+                               : "Annex-B (start codes)");
     nau = split_aus(data, len, &aus);
     if (!nau) {
         fprintf(stderr, "no H.264 access units found (Annex-B expected)\n");
@@ -170,12 +240,89 @@ int main(int argc, char **argv)
     fprintf(stderr, "cedar-decode: %s, %zu bytes, %zu access units\n", argv[optind],
             len, nau);
 
+    /*
+     * A raw stream carries no container. AVCC input is converted to Annex-B
+     * here with the same bitstream filter the decoder uses, and the picture
+     * size is read from the stream with FFmpeg's own H.264 decoder (the app
+     * gets the same values from mpv).
+     */
+    if (is_avcc(data, len)) {
+        size_t conv_len = 0;
+        uint8_t *conv = avcc_to_annexb(data, len, &conv_len);
+
+        if (!conv) {
+            fprintf(stderr, "h264_mp4toannexb conversion failed\n");
+            return 1;
+        }
+        free(data);
+        data = conv;
+        len = conv_len;
+        nau = split_aus(data, len, &aus);
+        fprintf(stderr, "cedar-decode: converted to Annex-B, %zu bytes, %zu access units\n",
+                len, nau);
+        {
+            size_t k;
+
+            fprintf(stderr, "cedar-decode: first bytes after the filter: ");
+            for (k = 0; k < len && k < 32; k++)
+                fprintf(stderr, "%02x ", data[k]);
+            fputc('\n', stderr);
+        }
+    }
+    {
+        const AVCodec *sw = avcodec_find_decoder(AV_CODEC_ID_H264);
+        AVCodecContext *sctx;
+        AVPacket *spkt;
+        AVFrame *sframe;
+
+        if (!sw) {
+            fprintf(stderr, "no software H.264 decoder to read the SPS\n");
+            return 1;
+        }
+        sctx = avcodec_alloc_context3(sw);
+        spkt = av_packet_alloc();
+        sframe = av_frame_alloc();
+        avcodec_open2(sctx, sw, NULL);
+        spkt->data = data;
+        spkt->size = (int)len;
+        if (avcodec_send_packet(sctx, spkt) >= 0)
+            avcodec_receive_frame(sctx, sframe);
+        if (sctx->width > 0 && sctx->height > 0) {
+            g_width = sctx->width;
+            g_height = sctx->height;
+        } else if (sframe->width > 0) {
+            g_width = sframe->width;
+            g_height = sframe->height;
+        }
+        av_frame_free(&sframe);
+        av_packet_free(&spkt);
+        avcodec_free_context(&sctx);
+    }
+
+    /* h264_cedar only decodes H.264; say so instead of feeding HEVC to it. */
+    if (!is_h264(aus[0].data, aus[0].size)) {
+        fprintf(stderr, "cedar-decode: not an H.264 stream (HEVC?); h264_cedar "
+                        "does not decode it\n");
+        return 3;
+    }
+
     codec = avcodec_find_decoder_by_name("h264_cedar");
     if (!codec) {
         fprintf(stderr, "h264_cedar is not in this libavcodec\n");
         return 1;
     }
     ctx = avcodec_alloc_context3(codec);
+    /*
+     * The app's libavcodec hands the decoder the container's SPS/PPS as
+     * extradata; without one the decoder learns the size from the stream.
+     * The packet time base must match the pts the packets carry.
+     */
+    ctx->pkt_timebase = (AVRational){ 1, 1000 };
+    if (g_width > 0 && g_height > 0) {
+        ctx->width  = g_width;
+        ctx->height = g_height;
+        fprintf(stderr, "cedar-decode: SPS says %dx%d\n", g_width, g_height);
+    }
     pkt = av_packet_alloc();
     frame = av_frame_alloc();
     ret = avcodec_open2(ctx, codec, NULL);
@@ -187,10 +334,6 @@ int main(int argc, char **argv)
     for (i = 0; i < nau; i++) {
         int eof = 0;
 
-        if (i == 0) {
-            fprintf(stderr, "first access unit, first 32 bytes: ");
-            hex_head(aus[i].data, aus[i].size);
-        }
         if (getenv("CEDAR_DUMP_AU") && i == 0) {
             const char *path = getenv("CEDAR_DUMP_AU");
             FILE *f = fopen(path, "wb");
@@ -209,8 +352,14 @@ int main(int argc, char **argv)
         if (ret < 0) {
             fprintf(stderr, "au %zu (%zu bytes): send_packet %d\n", i,
                     aus[i].size, ret);
-            if (errors++ == 0)
-                hex_head(aus[i].data, aus[i].size);
+            if (errors++ == 0) {
+                size_t k;
+
+                fprintf(stderr, "  first bytes: ");
+                for (k = 0; k < aus[i].size && k < 32; k++)
+                    fprintf(stderr, "%02x ", aus[i].data[k]);
+                fputc('\n', stderr);
+            }
         }
         while (!eof) {
             ret = avcodec_receive_frame(ctx, frame);
