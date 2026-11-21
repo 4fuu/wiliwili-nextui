@@ -413,6 +413,7 @@ fail:
 typedef struct H264CedarContext {
     CedarDecoder *handle;
     int width, height;
+    int logged_picture;  /* first picture already described in the log */
     int submitted;       /* access units accepted by the vendor parser */
     int flushed;         /* trailing access unit submitted after EOF */
     int eof_returned;
@@ -563,6 +564,7 @@ static int cedar_submit(AVCodecContext *avctx, const uint8_t *data, int size,
 static int cedar_copy_picture(AVCodecContext *avctx, AVFrame *frame,
                               const CedarVideoPicture *pic)
 {
+    H264CedarContext *ctx = avctx->priv_data;
     int chroma_w, rows, y, ret;
     const uint8_t *src;
 
@@ -589,6 +591,20 @@ static int cedar_copy_picture(AVCodecContext *avctx, AVFrame *frame,
     ret = ff_decode_frame_props(avctx, frame);
     if (ret < 0)
         return ret;
+    /*
+     * mpv takes the picture format from the AVFrame (mp_image_from_av_frame),
+     * and the output pipeline copies planes by that format's pixel size.
+     * NVIDIA (the libavutil enum): 0x18 = 24 = NV12, 0x1A = 26 = NV21.
+     */
+    if (!ctx->logged_picture) {
+        ctx->logged_picture = 1;
+        cedar_note("first picture: fmt %d %dx%d stride %d crop l%d t%d r%d b%d",
+                   pic->ePixelFormat, pic->nWidth, pic->nHeight,
+                   pic->nLineStride, pic->nLeftOffset, pic->nTopOffset,
+                   pic->nRightOffset, pic->nBottomOffset);
+        cedar_note("first picture: mapped pData0 %p pData1 %p",
+                   (void *)pic->pData0, (void *)pic->pData1);
+    }
     /*
      * The context drives the default frame pool (format, dimensions), and
      * libavcodec has not seen our pictures before the first one arrives.
