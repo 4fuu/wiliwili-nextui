@@ -72,10 +72,21 @@ static int is_start_code(const uint8_t *p, const uint8_t *end, int *len)
 }
 
 /*
- * One packet per picture. An access unit delimiter starts a new picture; a
- * stream without AUDs splits where a slice follows another slice. Parameter
- * sets and SEI stay attached to the picture that follows them, because the
- * vendor parser needs them in the same packet.
+ * first_mb_in_slice is the first ue(v) of a slice header. Its value is 0
+ * exactly when the first bit is 1 (a ue(v) of 0 is a single 1 bit), which is
+ * how a picture's first slice is told apart from the following slices of a
+ * multi-slice picture.
+ */
+static int starts_picture(const uint8_t *p, const uint8_t *end)
+{
+    return p < end && (*p & 0x80) != 0;
+}
+
+/*
+ * One packet per picture. Access units are delimited by access unit
+ * delimiters; in a stream without them, a picture starts at the slice whose
+ * first_mb_in_slice is 0. Parameter sets and SEI stay attached to the picture
+ * that follows them, because the vendor parser needs them in the same packet.
  */
 static size_t split_aus(const uint8_t *data, size_t len, struct au **out)
 {
@@ -95,16 +106,10 @@ static size_t split_aus(const uint8_t *data, size_t len, struct au **out)
             int type = p[sc] & 0x1f;
             int new_picture = 0;
 
-            /*
-             * A picture starts at an access unit delimiter (with or without
-             * AUDs) or, in a stream without delimiters, at the first slice
-             * of the next picture. A new delimiter always starts a new
-             * picture, including one that only carries parameter sets, so
-             * the count matches the stream's access units.
-             */
             if (type == 9)
                 new_picture = p > start;
-            else if ((type == 1 || type == 5) && slice_seen)
+            else if (slice_seen && (type == 1 || type == 5) &&
+                     starts_picture(p + sc + 1, end))
                 new_picture = 1;
 
             if (new_picture) {
@@ -293,31 +298,28 @@ int main(int argc, char **argv)
     }
 
     {
+        /*
+         * Size from the first access unit only: one picture is enough for
+         * the SPS to be parsed, and anything the software decoder prints on
+         * the way is suppressed (the app gets the size from mpv instead).
+         */
         const AVCodec *sw = avcodec_find_decoder(AV_CODEC_ID_H264);
-        AVCodecContext *sctx;
-        AVPacket *spkt;
-        AVFrame *sframe;
+        AVCodecContext *sctx = sw ? avcodec_alloc_context3(sw) : NULL;
+        AVPacket *spkt = av_packet_alloc();
+        AVFrame *sframe = av_frame_alloc();
 
-        if (!sw) {
-            fprintf(stderr, "no software H.264 decoder to read the SPS\n");
-            free(aus);
-            free(data);
-            return 1;
-        }
-        sctx = avcodec_alloc_context3(sw);
-        spkt = av_packet_alloc();
-        sframe = av_frame_alloc();
-        avcodec_open2(sctx, sw, NULL);
-        spkt->data = data;
-        spkt->size = (int)len;
-        if (avcodec_send_packet(sctx, spkt) >= 0)
-            avcodec_receive_frame(sctx, sframe);
-        if (sctx->width > 0 && sctx->height > 0) {
-            g_width = sctx->width;
-            g_height = sctx->height;
-        } else if (sframe->width > 0) {
-            g_width = sframe->width;
-            g_height = sframe->height;
+        if (sctx && spkt && sframe) {
+            int saved = av_log_get_level();
+
+            av_log_set_level(AV_LOG_QUIET);
+            avcodec_open2(sctx, sw, NULL);
+            spkt->data = (uint8_t *)aus[0].data;
+            spkt->size = (int)aus[0].size;
+            if (avcodec_send_packet(sctx, spkt) >= 0)
+                avcodec_receive_frame(sctx, sframe);
+            av_log_set_level(saved);
+            g_width  = sctx->width  > 0 ? sctx->width  : sframe->width;
+            g_height = sctx->height > 0 ? sctx->height : sframe->height;
         }
         av_frame_free(&sframe);
         av_packet_free(&spkt);
@@ -392,9 +394,10 @@ int main(int argc, char **argv)
                 break;
             }
             frames++;
-            fprintf(stderr, "frame %zu: %s %dx%d pts %lld (au %zu)\n", frames,
-                    av_get_pix_fmt_name(frame->format), frame->width,
-                    frame->height, (long long)frame->pts, i);
+            if (!quiet)
+                fprintf(stderr, "frame %zu: %s %dx%d pts %lld (au %zu)\n", frames,
+                        av_get_pix_fmt_name(frame->format), frame->width,
+                        frame->height, (long long)frame->pts, i);
             av_frame_unref(frame);
             if (limit && (int)frames >= limit) {
                 i = nau;
