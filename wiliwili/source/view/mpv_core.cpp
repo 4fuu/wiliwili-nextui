@@ -376,7 +376,8 @@ void MPVCore::init() {
     if (CEDAR_DEC) {
         // 解码器由 FFmpeg 提供，mpv 不需要 hwdec；由设置直接选定，不做可用性探测
         mpvSetOptionString(mpv, "hwdec", "no");
-        mpvSetOptionString(mpv, "vd", "h264_cedar");
+        // The decoder is chosen per file by setUrl(), from the setting at that
+        // moment; no stale --vd survives a restart.
         brls::Logger::info("MPV video decoder: h264_cedar");
     } else if (HARDWARE_DEC) {
         mpvSetOptionString(mpv, "hwdec", PLAYER_HWDEC_METHOD.c_str());
@@ -1201,7 +1202,7 @@ void MPVCore::setUrl(const std::string &url, const std::string &extra, const std
     brls::Logger::debug("{} Url: {}, extra: {}", method, url, extra);
 #ifdef NEXTUI_TG5040
     // --vd is reset on the next file, so re-apply the setting's choice
-    if (CEDAR_DEC) MpvCedarDecoder::selectDecoder(true);
+    MpvCedarDecoder::selectDecoder(CEDAR_DEC);
 #endif
     if (extra.empty()) {
         command_async("loadfile", url, method);
