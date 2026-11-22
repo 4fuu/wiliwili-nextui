@@ -431,7 +431,6 @@ fail:
 
 /* ---- per-stream decoder ----------------------------------------------- */
 
-#define CEDAR_AU_MARKER  0x7f7f7f7f /* pts of the "flush" access unit */
 
 /*
  * Pictures the engine has finished and that have not been handed out yet.
@@ -456,9 +455,11 @@ typedef struct H264CedarContext {
     int nqueued;
     int decoded;         /* at least one picture came out */
     const char *closing_reason; /* for the trace */
-    AVRational stream_fps;   /* from the SPS, for the pts fallback */
+    AVRational stream_fps;   /* from the SPS, for frame duration */
     AVRational timebase;     /* packet time base, resolved once */
-    int64_t last_pts;        /* last real pts, in the packet time base */
+    int64_t last_pts;        /* pts of the last packet, packet time base */
+    int64_t synth_pts;       /* for a packet that came without one */
+    int has_pts;             /* last_pts holds a real pts */
     int64_t frame_count;
     int64_t parse_deadline; /* when to stop waiting for the parser */
     int flushed;         /* trailing access unit submitted after EOF */
@@ -559,6 +560,8 @@ static int cedar_open_decoder(AVCodecContext *avctx, int width, int height)
     ctx->height   = height;
     ctx->flushed  = 0;
     ctx->last_pts = AV_NOPTS_VALUE;
+    ctx->synth_pts = 0;
+    ctx->has_pts = 0;
     /*
      * mpv hands this decoder MP4-style packets: extradata with the SPS/PPS
      * and length-prefixed NAL units. The Cedar parser only understands
@@ -617,12 +620,15 @@ static void cedar_close_decoder(AVCodecContext *avctx)
 }
 
 /*
- * The vendor parser aborts on AV_NOPTS_VALUE (INT64_MIN): libawh264 asserts
- * on it instead of ignoring it, so a packet without a pts gets a monotonic
- * one. The picture carries it back, which is how an output frame is matched
- * to the access unit it came from.
- */
-/*
+ * The vendor parser aborts on AV_NOPTS_VALUE (INT64_MIN), so no submit ever
+ * carries it, and the picture carries the pts back: that is how an output
+ * frame is matched to the access unit it came from.
+ *
+ * A packet without a pts (a raw Annex-B file has no container; mpv always
+ * provides one) continues from the last pts by one frame, and the flush
+ * access unit gets the next one after the last. The vendor drops the flush
+ * packet before it can come back as a picture.
+ *
  * The packet time base. libavcodec passes it in pkt_timebase; if a caller
  * leaves it unset the stream's own time base is the closest thing, and 1/1000
  * the last resort. Guessing wrong here stretches or compresses the whole
@@ -653,25 +659,6 @@ static int64_t cedar_frame_duration(AVCodecContext *avctx,
     return d > 0 ? d : 1;
 }
 
-static int64_t cedar_pts(AVCodecContext *avctx, H264CedarContext *ctx,
-                         int64_t pts)
-{
-    if (pts != AV_NOPTS_VALUE && pts > INT64_MIN / 2) {
-        ctx->last_pts = pts;
-        return pts;
-    }
-    /*
-     * A packet without a pts (mpv leaves it unset for some streams). The
-     * value must be in the packet time base: a microsecond value read as
-     * 1/90000 ticks would stretch every frame by 90x.
-     */
-    if (ctx->last_pts == AV_NOPTS_VALUE)
-        ctx->last_pts = 0;
-    else
-        ctx->last_pts += cedar_frame_duration(avctx, ctx);
-    return ctx->last_pts;
-}
-
 static int cedar_submit(AVCodecContext *avctx, const uint8_t *data, int size,
                         int64_t pts)
 {
@@ -695,7 +682,6 @@ static int cedar_submit(AVCodecContext *avctx, const uint8_t *data, int size,
         memcpy(ring, data + buf_size, size - buf_size);
     }
 
-    pts = cedar_pts(avctx, ctx, pts);
     if (ctx->submitted < 10 || ctx->submitted % 60 == 0)
         cedar_note("submit %d: %d bytes, pts %lld (tb %d/%d)",
                    ctx->submitted, size, (long long)pts,
@@ -891,8 +877,7 @@ static void cedar_take_picture(AVCodecContext *avctx, AVFrame *frame,
          * counter is never used here, because a wrong pts stretches or
          * compresses the whole timeline.
          */
-        if (pic->nPts != AV_NOPTS_VALUE && pic->nPts > INT64_MIN / 2 &&
-            pic->nPts != CEDAR_AU_MARKER)
+        if (pic->nPts != AV_NOPTS_VALUE && pic->nPts > INT64_MIN / 2)
             frame->pts = pic->nPts;
         else
             frame->pts = AV_NOPTS_VALUE;
@@ -970,6 +955,22 @@ static int cedar_submit_packet(AVCodecContext *avctx, AVPacket *in)
     if (ret < 0)
         goto done;
     while ((ret = av_bsf_receive_packet(ctx->annexb, out)) >= 0) {
+        /*
+         * Never submit AV_NOPTS_VALUE (the vendor parser aborts on it).
+         * A packet the filter held back for its parameter sets comes out
+         * without one, and a raw Annex-B file has no container to give any;
+         * both continue from the last pts by one frame in the packet time
+         * base. mpv always provides a pts, so in the app this is the flush
+         * access unit and anything the filter delayed.
+         */
+        if (out->pts == AV_NOPTS_VALUE) {
+            if (ctx->has_pts)
+                out->pts = ctx->last_pts + cedar_frame_duration(avctx, ctx);
+            else
+                out->pts = in->pts != AV_NOPTS_VALUE ? in->pts : ctx->synth_pts;
+        }
+        ctx->last_pts = out->pts;
+        ctx->has_pts = 1;
         ret = cedar_submit(avctx, out->data, out->size, out->pts);
         av_packet_unref(out);
         if (ret < 0)
@@ -1008,11 +1009,19 @@ static int h264_cedar_decode(AVCodecContext *avctx, AVFrame *frame,
             return AVERROR_EOF;
         if (!ctx->flushed) {
             static const uint8_t aud_data[] = { 0, 0, 0, 1, 0x09, 0xf0 };
+            int64_t last = ctx->last_pts;
 
             ctx->flushed = 1;
             if (av_new_packet(&aud, sizeof(aud_data)) >= 0) {
                 memcpy(aud.data, aud_data, sizeof(aud_data));
-                aud.pts = CEDAR_AU_MARKER;
+                /*
+                 * The vendor parser drops this packet before it is ever
+                 * returned as a picture; give it the pts one frame after the
+                 * last real one so it can never sort ahead of a picture.
+                 */
+                aud.pts = ctx->has_pts
+                              ? last + cedar_frame_duration(avctx, ctx)
+                              : 0;
                 cedar_submit_packet(avctx, &aud);
                 av_packet_unref(&aud);
             }
@@ -1043,15 +1052,16 @@ static int h264_cedar_decode(AVCodecContext *avctx, AVFrame *frame,
         /*
          * The vendor engine sizes its buffers at InitializeVideoDecoder and
          * cannot change them later, so the picture size must be the real
-         * one. ff_set_dimensions() was fed the parsed SPS (avctx->width and
-         * height); coded_width/height may still be 0 and must not become a
-         * guess such as 1920x1080.
+         * one. The parser above already ran on this packet, so avctx
+         * carries the SPS dimensions (also from extradata); width/height are
+         * the cropped size and fall back to the coded one.
          */
         int width  = avctx->width  > 0 ? avctx->width  : avctx->coded_width;
         int height = avctx->height > 0 ? avctx->height : avctx->coded_height;
 
         if (width <= 0 || height <= 0) {
-            cedar_warn("no picture size yet (%dx%d), deferring", width, height);
+            /* The next packet goes through the parser again; nothing lost. */
+            cedar_note("no picture size yet (%dx%d), deferring", width, height);
             return avpkt->size;
         }
         ret = cedar_open_decoder(avctx, width, height);

@@ -12,9 +12,17 @@
  *   cedar-decode test720p60.264          # 0 = every frame decoded
  *   cedar-decode -q test720p60.264       # quiet: summary only
  *   cedar-decode -n 60 file.264          # stop after 60 frames
+ *   cedar-decode -f 30 file.264          # source frame rate, for the pts
+ *   cedar-decode -s 1000 -f 30 file.264  # pts 0/1000/2000 in 1/1000 ticks
  *
  * The h264_cedar decoder itself writes its trace to stderr when
  * H264_CEDAR_TRACE=1 is set; this tool sets it unless -q is given.
+ *
+ * Timestamps: each access unit is handed over with pts i*step in time base
+ * 1/1000, which is what mpv does with the packet timestamps it gets from the
+ * container. If the frame pts printed per frame are not i*step, or frame
+ * pts differs from picture pts in the h264_cedar trace, the timeline the
+ * player sees is wrong.
  *
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -58,19 +66,6 @@ static uint8_t *read_file(const char *path, size_t *len)
     return buf;
 }
 
-static int is_start_code(const uint8_t *p, const uint8_t *end, int *len)
-{
-    if (end - p >= 3 && p[0] == 0 && p[1] == 0 && p[2] == 1) {
-        *len = 3;
-        return 1;
-    }
-    if (end - p >= 4 && p[0] == 0 && p[1] == 0 && p[2] == 0 && p[3] == 1) {
-        *len = 4;
-        return 1;
-    }
-    return 0;
-}
-
 /*
  * first_mb_in_slice is the first ue(v) of a slice header. Its value is 0
  * exactly when the first bit is 1 (a ue(v) of 0 is a single 1 bit), which is
@@ -88,6 +83,8 @@ static int starts_picture(const uint8_t *p, const uint8_t *end)
  * first_mb_in_slice is 0. Parameter sets and SEI stay attached to the picture
  * that follows them, because the vendor parser needs them in the same packet.
  */
+static size_t g_first_sc = 0;   /* start code length of the first NAL */
+
 static size_t split_aus(const uint8_t *data, size_t len, struct au **out)
 {
     const uint8_t *end = data + len;
@@ -98,7 +95,16 @@ static size_t split_aus(const uint8_t *data, size_t len, struct au **out)
     for (p = data; p < end; p++) {
         int sc;
 
-        if (!is_start_code(p, end, &sc))
+        /*
+         * The 4-byte form 00 00 00 01 also contains the 3-byte 00 00 01, so
+         * try the longer one first; otherwise every NAL reads as type 0 and
+         * no access unit is ever split.
+         */
+        if (p + 4 <= end && p[0] == 0 && p[1] == 0 && p[2] == 0 && p[3] == 1)
+            sc = 4;
+        else if (p + 3 <= end && p[0] == 0 && p[1] == 0 && p[2] == 1)
+            sc = 3;
+        else
             continue;
         if (p + sc >= end)
             break;
@@ -125,6 +131,8 @@ static size_t split_aus(const uint8_t *data, size_t len, struct au **out)
             }
             if (type == 1 || type == 5)
                 slice_seen = p;
+            if (p == data)
+                g_first_sc = (size_t)sc;
         }
         p += sc - 1;
     }
@@ -192,19 +200,30 @@ static int is_avcc(const uint8_t *data, size_t len)
 }
 
 /* H.264 NAL types this decoder handles; HEVC has no AUD of type 9. */
+/* Skip the leading start code (3 or 4 bytes); 0 if there is none. */
+static size_t nal_start(const uint8_t *au, size_t size)
+{
+    if (size >= 4 && au[0] == 0 && au[1] == 0 && au[2] == 0 && au[3] == 1)
+        return 4;
+    if (size >= 3 && au[0] == 0 && au[1] == 0 && au[2] == 1)
+        return 3;
+    return 0;
+}
+
+/*
+ * An access unit starts with SEI or AUD as often as with a slice, so look at
+ * the first NAL header itself. HEVC has no H.264 nal_unit_type 1/5/7/8/9
+ * sequence here, and its first NAL would be read as type 16 or 19 (VPS/IDR).
+ */
 static int is_h264(const uint8_t *au, size_t size)
 {
-    size_t i;
+    size_t off = nal_start(au, size);
+    int type;
 
-    for (i = 0; i + 4 < size; i++) {
-        if (au[i] == 0 && au[i + 1] == 0 && au[i + 2] == 1) {
-            int type = au[i + 3] & 0x1f;
-
-            return type == 1 || type == 5 || type == 7 || type == 8 ||
-                   type == 9;
-        }
-    }
-    return 0;
+    if (!off || off >= size)
+        return 0;
+    type = au[off] & 0x1f;
+    return type == 1 || type == 5 || type == 7 || type == 8 || type == 9;
 }
 
 static int g_width, g_height;
@@ -219,20 +238,31 @@ int main(int argc, char **argv)
     uint8_t *data;
     size_t len, nau, i, sent = 0, frames = 0, errors = 0;
     int quiet = 0, limit = 0, opt, ret;
+    int fps = 30;
+    int64_t step = 0;   /* pts step in the 1/1000 time base */
+    int64_t last_pts = 0;
 
-    while ((opt = getopt(argc, argv, "qn:")) != -1) {
+    while ((opt = getopt(argc, argv, "qn:f:s:")) != -1) {
         switch (opt) {
         case 'q': quiet = 1; break;
         case 'n': limit = atoi(optarg); break;
+        case 'f': fps = atoi(optarg); break;
+        case 's': step = atoll(optarg); break;
         default:
-            fprintf(stderr, "usage: %s [-q] [-n frames] file.264\n", argv[0]);
+            fprintf(stderr, "usage: %s [-q] [-n frames] [-f fps] [-s pts_step] "
+                            "file.264\n", argv[0]);
             return 2;
         }
     }
     if (optind != argc - 1) {
-        fprintf(stderr, "usage: %s [-q] [-n frames] file.264\n", argv[0]);
+        fprintf(stderr, "usage: %s [-q] [-n frames] [-f fps] [-s pts_step] "
+                        "file.264\n", argv[0]);
         return 2;
     }
+    if (fps <= 0)
+        fps = 30;
+    if (step <= 0)
+        step = 1000 / fps > 0 ? 1000 / fps : 1;
     if (!quiet && !getenv("H264_CEDAR_TRACE"))
         setenv("H264_CEDAR_TRACE", "1", 0);
 
@@ -278,8 +308,9 @@ int main(int argc, char **argv)
         free(data);
         return 1;
     }
-    fprintf(stderr, "cedar-decode: %s, %zu bytes, %zu access units\n",
-            argv[optind], len, nau);
+    fprintf(stderr, "cedar-decode: %s, %zu bytes, %zu access units, first "
+                    "start code %zu bytes\n", argv[optind], len, nau,
+            g_first_sc);
     if (!quiet) {
         size_t k;
 
@@ -289,7 +320,11 @@ int main(int argc, char **argv)
         fputc('\n', stderr);
     }
     /* h264_cedar only decodes H.264; say so instead of feeding HEVC to it. */
-    if (!is_h264(aus[0].data, aus[0].size)) {
+    for (i = 0; i < nau; i++) {
+        if (is_h264(aus[i].data, aus[i].size))
+            break;
+    }
+    if (i == nau) {
         fprintf(stderr, "cedar-decode: not an H.264 stream (HEVC?); h264_cedar "
                         "does not decode it\n");
         free(aus);
@@ -313,10 +348,18 @@ int main(int argc, char **argv)
 
             av_log_set_level(AV_LOG_QUIET);
             avcodec_open2(sctx, sw, NULL);
-            spkt->data = (uint8_t *)aus[0].data;
-            spkt->size = (int)aus[0].size;
-            if (avcodec_send_packet(sctx, spkt) >= 0)
-                avcodec_receive_frame(sctx, sframe);
+            /*
+             * Annex-B: the decoder parses the parameter sets from the
+             * packet itself. A file that starts with SEI or AUD is skipped
+             * as non-VCL and its first frame is not a picture, so look
+             * through every access unit until one parses.
+             */
+            for (i = 0; i < nau && (sctx->width <= 0 || sctx->height <= 0); i++) {
+                spkt->data = (uint8_t *)aus[i].data;
+                spkt->size = (int)aus[i].size;
+                if (avcodec_send_packet(sctx, spkt) >= 0)
+                    avcodec_receive_frame(sctx, sframe);
+            }
             av_log_set_level(saved);
             g_width  = sctx->width  > 0 ? sctx->width  : sframe->width;
             g_height = sctx->height > 0 ? sctx->height : sframe->height;
@@ -340,6 +383,7 @@ int main(int argc, char **argv)
      * The packet time base must match the pts the packets carry.
      */
     ctx->pkt_timebase = (AVRational){ 1, 1000 };
+    ctx->framerate = (AVRational){ fps, 1 };
     if (g_width > 0 && g_height > 0) {
         ctx->width  = g_width;
         ctx->height = g_height;
@@ -368,7 +412,8 @@ int main(int argc, char **argv)
         }
         pkt->data = (uint8_t *)aus[i].data;
         pkt->size = (int)aus[i].size;
-        pkt->pts = pkt->dts = (int64_t)i;
+        pkt->pts = pkt->dts = (int64_t)i * step;
+        last_pts = pkt->pts;
         ret = avcodec_send_packet(ctx, pkt);
         sent++;
         if (ret < 0) {
@@ -406,11 +451,20 @@ int main(int argc, char **argv)
         }
     }
     /* Flush whatever the decoder still holds. */
-    avcodec_send_packet(ctx, NULL);
+    pkt->data = NULL;
+    pkt->size = 0;
+    pkt->pts = pkt->dts = last_pts + step;
+    avcodec_send_packet(ctx, pkt);
     while (avcodec_receive_frame(ctx, frame) == 0) {
         frames++;
+        if (!quiet)
+            fprintf(stderr, "frame %zu (flush): pts %lld\n", frames,
+                    (long long)frame->pts);
         av_frame_unref(frame);
     }
+    fprintf(stderr, "cedar-decode: pts step %lld in 1/1000, expected last "
+                    "frame pts %lld\n", (long long)step,
+            (long long)(nau - 1) * step);
 
     avcodec_free_context(&ctx);
     av_packet_free(&pkt);
