@@ -492,7 +492,13 @@ static int cedar_open_decoder(AVCodecContext *avctx, int width, int height)
 
     memset(&cfg, 0, sizeof(cfg));
     cfg.eOutputPixelFormat = CEDAR_PIXEL_NV21;
-    cfg.bNoBFrames         = 1;
+    /*
+     * The stream decides about B-frames: a live stream has none, a video
+     * file usually does, and telling the engine "no B-frames" about a stream
+     * that has them makes it output in the wrong order. libavcodec has
+     * parsed the SPS by the time the first picture arrives.
+     */
+    cfg.bNoBFrames         = avctx->has_b_frames > 0 ? 0 : 1;
     cfg.bDisable3D         = 1;
     cfg.nVbvBufferSize     = CEDAR_VBV_BYTES;
     cfg.nAlignStride       = 16;
@@ -786,19 +792,28 @@ static void cedar_collect_pictures(AVCodecContext *avctx)
     }
 }
 
-/* Hands the oldest queued picture to libavcodec. */
+/*
+ * Hands out the queued picture with the smallest pts. The engine releases
+ * pictures in display order for a stream with B-frames, but a queue built
+ * from several releases can still hold them out of order; libavcodec and
+ * mpv both want a monotonic timeline.
+ */
 static void cedar_take_picture(AVCodecContext *avctx, AVFrame *frame,
                                int *got_picture)
 {
     H264CedarContext *ctx = avctx->priv_data;
     CedarVideoPicture *pic;
+    int i, best = 0;
 
     *got_picture = 0;
     if (ctx->nqueued == 0)
         return;
-    pic = ctx->queued[0];
-    memmove(ctx->queued, ctx->queued + 1,
-            (size_t)(ctx->nqueued - 1) * sizeof(*ctx->queued));
+    for (i = 1; i < ctx->nqueued; i++)
+        if (ctx->queued[i]->nPts < ctx->queued[best]->nPts)
+            best = i;
+    pic = ctx->queued[best];
+    memmove(ctx->queued + best, ctx->queued + best + 1,
+            (size_t)(ctx->nqueued - best - 1) * sizeof(*ctx->queued));
     ctx->nqueued--;
 
     if (cedar_copy_picture(avctx, frame, pic) == 0) {
@@ -836,9 +851,14 @@ static int cedar_step(AVCodecContext *avctx, AVFrame *frame, int *got_picture)
     case CEDAR_RESULT_OK:
     case CEDAR_RESULT_NO_FRAME_BUFFER:
         /*
-         * The parser has not closed a frame yet. Not an error: the caller
-         * consumes the packet and libavcodec feeds the next one.
+         * The parser has not closed a frame yet, or is still reordering one
+         * (B-frames). Not an error: the caller consumes the packet and
+         * libavcodec feeds the next one, which is what gives the engine the
+         * input it needs.
          */
+        if (ctx->submitted <= 2)
+            cedar_note("waiting for a frame after %d access units",
+                       ctx->submitted);
         return 0;
     case CEDAR_RESULT_RESOLUTION_CHANGE:
         /* Not recoverable in place: mpv counts this and falls back. */
