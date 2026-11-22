@@ -65,9 +65,70 @@ export CURL_CA_BUNDLE="$CA_BUNDLE"
 export SSL_CERT_FILE="$CA_BUNDLE"
 echo "ca bundle: $CA_BUNDLE"
 
+# WiFi power save: with it on, wlan0 latency averages ~23ms, off it drops to
+# ~5-9ms (measured on this device by the Moonlight pak), which decides how fast
+# pages and video segments load. Turn it off for the run and put the previous
+# state back afterwards. Every step is best effort: a missing iw/wlan0 or a
+# failed call just leaves the radio alone.
+WLAN_IFACE=wlan0
+POWER_SAVE_CHANGED=0
+POWER_SAVE_PREVIOUS=
+
+wifi_power_save_restore() {
+    [ "$POWER_SAVE_CHANGED" = "1" ] || return 0
+    POWER_SAVE_CHANGED=0
+    if iw dev "$WLAN_IFACE" set power_save "$POWER_SAVE_PREVIOUS" 2>/dev/null; then
+        echo "wifi power_save restored to $POWER_SAVE_PREVIOUS on $WLAN_IFACE"
+    else
+        echo "wifi power_save restore to $POWER_SAVE_PREVIOUS failed on $WLAN_IFACE"
+    fi
+    return 0
+}
+
+# The restore must run however the app ends, including SIGTERM from the
+# desktop. Recording the signal and finishing normally keeps the exit status
+# meaningful and the restore unconditional.
+LAUNCH_SIGNAL=
+trap 'LAUNCH_SIGNAL=HUP' HUP
+trap 'LAUNCH_SIGNAL=INT' INT
+trap 'LAUNCH_SIGNAL=TERM' TERM
+
+if command -v iw >/dev/null 2>&1 && iw dev "$WLAN_IFACE" info >/dev/null 2>&1; then
+    POWER_SAVE_CURRENT=$(iw dev "$WLAN_IFACE" get power_save 2>/dev/null)
+    POWER_SAVE_PREVIOUS=${POWER_SAVE_CURRENT##* }
+    case "$POWER_SAVE_PREVIOUS" in
+        on)
+            if iw dev "$WLAN_IFACE" set power_save off 2>/dev/null; then
+                POWER_SAVE_CHANGED=1
+                echo "wifi power_save off on $WLAN_IFACE (was on)"
+            else
+                echo "wifi power_save off failed on $WLAN_IFACE"
+            fi
+            ;;
+        off)
+            echo "wifi power_save already off on $WLAN_IFACE"
+            ;;
+        *)
+            echo "wifi power_save state unknown on $WLAN_IFACE: ${POWER_SAVE_CURRENT:-no output}"
+            ;;
+    esac
+else
+    echo "wifi power_save: iw or $WLAN_IFACE not available, left alone"
+fi
+
 echo "starting: $PAK_DIR/bin/wiliwili $*"
 "$PAK_DIR/bin/wiliwili" "$@"
 status=$?
+
+wifi_power_save_restore
+if [ -n "$LAUNCH_SIGNAL" ]; then
+    echo "interrupted by SIG$LAUNCH_SIGNAL"
+    case "$LAUNCH_SIGNAL" in
+        HUP) status=129 ;;
+        INT) status=130 ;;
+        TERM) status=143 ;;
+    esac
+fi
 
 echo "exit status: $status"
 exit $status

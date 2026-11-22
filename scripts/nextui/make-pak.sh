@@ -50,6 +50,21 @@ python3 "$ROOT/scripts/nextui/collect-libs.py" \
     "$PAK/lib/libstdc++.so.6" \
     "$PAK/lib/libgcc_s.so.1"
 
+# The collector leaves device libraries out, but the staged libstdc++/libgcc_s
+# may pull in one of the glibc parts, and the libc link script adds
+# ld-linux-aarch64.so.1 as a NEEDED entry. Neither belongs in the pak.
+for soname in ld-linux-aarch64.so.1 libc.so.6 libc_malloc_debug.so.0 libm.so.6 \
+               libdl.so.2 libpthread.so.0 librt.so.1 libresolv.so.2; do
+    rm -f "$PAK/lib/$soname"
+done
+
+# On-device decode tester (bin/cedar-decode): runs the pak's own libavcodec
+# against an H.264 file from a shell, so a device problem can be reproduced
+# without the app. Built by scripts/nextui/cedar/make-tester.
+if [ -x "$ROOT/dist/cedar-decode" ]; then
+    install -m 755 "$ROOT/dist/cedar-decode" "$PAK/bin/cedar-decode"
+fi
+
 # CA bundle fallback. The launch script prefers the system bundle in
 # /mnt/SDCARD/.system/res/ca-bundle.crt and only uses this copy if that file is
 # missing.

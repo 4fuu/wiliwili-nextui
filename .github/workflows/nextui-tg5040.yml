@@ -2,7 +2,11 @@ name: NextUI tg5040
 
 # Cross-builds wiliwili for NextUI on the TrimUI Brick Pro (tg5040) inside the
 # NextUI toolchain container. Produces a complete WiliWili.pakz artifact:
-# aarch64 binary, GLES3 UI, libmpv/FFmpeg software decode (no nonfree code).
+# aarch64 binary, GLES3 UI, libmpv/FFmpeg with both the software decoder and
+# the CedarX hardware H.264 decoder (h264_cedar), no nonfree code.
+#
+# Hardware decode is a setting, off by default: with it on, mpv decodes H.264
+# through the device's vendor decoder (see NEXTUI.md); off, nothing changes.
 #
 # The host orb has no Docker, so this workflow is the authoritative aarch64
 # build. The recipe is the same one a Docker host runs locally:
@@ -41,6 +45,8 @@ jobs:
     env:
       JOBS: 4
       MPV_NO_FB: ${{ github.event.inputs.mpv_no_fb == 'true' && '1' || '0' }}
+      FFMPEG_EXTRA_SRC: scripts/nextui/ffmpeg/h264_cedardec.c
+      FFMPEG_EXTRA_COMPONENTS: decoder=h264_cedar
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -50,7 +56,26 @@ jobs:
       - name: Install build tools
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends meson zip file
+          apt-get install -y --no-install-recommends meson zip file bzip2 curl ca-certificates binutils
+
+      # The patched decoder source is copied from inside $SRC; make it absolute.
+      - name: Resolve decoder path
+        run: echo "FFMPEG_EXTRA_SRC=$GITHUB_WORKSPACE/$FFMPEG_EXTRA_SRC" >> "$GITHUB_ENV"
+
+      # The vendor SDK's glibc 2.25 and ld 2.33 cannot build libavcodec or
+      # libsbm, so the C library and linker come from Bootlin's glibc 2.31.
+      - name: Toolchain (vendor SDK + Bootlin glibc 2.31)
+        run: |
+          sh ./scripts/nextui/cedar/toolchain.sh > /tmp/cedar-env.sh
+          . /tmp/cedar-env.sh
+          # Under their own names: a CFLAGS written to $GITHUB_ENV would
+          # override the flags inside CMake's toolchain file.
+          echo "PATH=$PATH" >> "$GITHUB_ENV"
+          echo "CEDAR_TOOLCHAIN_DIR=$CEDAR_TOOLCHAIN_DIR" >> "$GITHUB_ENV"
+          echo "CEDAR_CFLAGS=$CEDAR_CFLAGS" >> "$GITHUB_ENV"
+          echo "CEDAR_CXXFLAGS=$CEDAR_CXXFLAGS" >> "$GITHUB_ENV"
+          echo "CEDAR_LDFLAGS=$CEDAR_LDFLAGS" >> "$GITHUB_ENV"
+          aarch64-buildroot-linux-gnu-gcc --version | head -1
 
       - name: Show toolchain
         run: |
@@ -64,16 +89,27 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .nextui-build/src
-          key: nextui-deps-src-${{ hashFiles('scripts/nextui/build-deps.sh') }}
+          key: nextui-deps-src-${{ hashFiles('scripts/nextui/build-deps.sh', 'scripts/nextui/ffmpeg/h264_cedardec.c') }}
 
-      - name: Build dependencies (FFmpeg, libmpv, libass)
-        run: ./scripts/nextui/build-deps.sh
+      - name: Build dependencies (FFmpeg with h264_cedar, libmpv, libass)
+        run: CFLAGS="$CEDAR_CFLAGS" CXXFLAGS="$CEDAR_CXXFLAGS" LDFLAGS="$CEDAR_LDFLAGS" ./scripts/nextui/build-deps.sh
 
       - name: Build wiliwili
         run: ./scripts/nextui/build-wiliwili.sh
 
+      - name: Build the on-device decode tester
+        run: ./scripts/nextui/cedar/make-tester
+
       - name: Package pak
         run: ./scripts/nextui/make-pak.sh
+
+      - name: Verify the pak
+        run: |
+          # Fail instead of shipping a pak without the hardware decoder.
+          strings dist/WiliWili.pak/lib/libavcodec.so.60 | grep -qx h264_cedar
+          strings dist/WiliWili.pak/lib/libavcodec.so.60 | grep -qx h264_mp4toannexb
+          test -x dist/WiliWili.pak/bin/cedar-decode
+          test -x dist/WiliWili.pak/bin/wiliwili
 
       - name: Build summary
         run: |

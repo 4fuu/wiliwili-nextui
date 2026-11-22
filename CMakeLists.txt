@@ -172,6 +172,16 @@ list(APPEND APP_PLATFORM_OPTION
 if (NEXTUI_TG5040)
     message(STATUS "NextUI tg5040 device defaults enabled")
     list(APPEND APP_PLATFORM_OPTION -DNEXTUI_TG5040)
+    # The CedarX vendor parser (libsbm.so) calls SemTimedWait and must bind it
+    # to wiliwili's blocking version (scripts/nextui/cedar/src/cedar_sync.c)
+    # instead of its own usleep-polling one. Linkers before 2.35 only have -E.
+    include(CheckLinkerFlag)
+    check_linker_flag(CXX LINKER:--export-dynamic-symbol=SemTimedWait TG5040_HAVE_EXPORT_SYMBOL)
+    if (TG5040_HAVE_EXPORT_SYMBOL)
+        list(APPEND APP_PLATFORM_LINK_OPTION "-Wl,--export-dynamic-symbol=SemTimedWait")
+    else ()
+        list(APPEND APP_PLATFORM_LINK_OPTION "-Wl,-u,SemTimedWait" "-Wl,-E")
+    endif ()
 endif ()
 
 if (BUILTIN_NSP)
@@ -223,6 +233,15 @@ set_source_files_properties(
         wiliwili/source/activity/setting_activity.cpp
         wiliwili/source/activity/dlna_activity.cpp
         PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
+
+if (NEXTUI_TG5040)
+    # The CedarX vendor parser binds SemTimedWait at run time; its blocking
+    # replacement is C (scripts/nextui/cedar/src/cedar_sync.c), compiled
+    # with the project's own warning settings.
+    target_sources(${PROJECT_NAME} PRIVATE scripts/nextui/cedar/src/cedar_sync.c)
+    target_include_directories(${PROJECT_NAME} PRIVATE scripts/nextui/cedar/src)
+    target_link_libraries(${PROJECT_NAME} PRIVATE ${CMAKE_DL_LIBS})
+endif ()
 
 # building release file
 if (PLATFORM_DESKTOP)

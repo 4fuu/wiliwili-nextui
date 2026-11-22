@@ -1,0 +1,124 @@
+name: NextUI tg5040 (CedarX decode)
+
+# Opt-in build that turns on the CedarX hardware decoder: the bundled FFmpeg
+# gets the h264_cedar decoder (scripts/nextui/ffmpeg/) and wiliwili tries it
+# when the device's "hardware decode" setting is on, falling back to software
+# otherwise. The regular nextui-tg5040.yml build stays software-only, so this
+# artifact is the one to test on a device.
+
+on:
+  push:
+    branches:
+      - feat/cedar-hwdec
+  workflow_dispatch:
+
+concurrency:
+  group: nextui-tg5040-cedar-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build WiliWili.pakz (CedarX)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    container:
+      image: ghcr.io/loveretro/tg5040-toolchain:latest
+    env:
+      JOBS: 4
+      MPV_NO_FB: 0
+      FFMPEG_EXTRA_SRC: scripts/nextui/ffmpeg/h264_cedardec.c
+      FFMPEG_EXTRA_COMPONENTS: decoder=h264_cedar
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # The decoder source is copied from inside $SRC, so make the path absolute.
+      - name: Resolve decoder path
+        run: echo "FFMPEG_EXTRA_SRC=$GITHUB_WORKSPACE/$FFMPEG_EXTRA_SRC" >> "$GITHUB_ENV"
+
+      - name: Install build tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends meson zip file bzip2 curl ca-certificates binutils
+
+      - name: Toolchain (vendor SDK + Bootlin glibc 2.31 C library and linker)
+        run: |
+          sh ./scripts/nextui/cedar/toolchain.sh > /tmp/cedar-env.sh
+          . /tmp/cedar-env.sh
+          # Under names of their own: a CFLAGS/CXXFLAGS/LDFLAGS written to
+          # $GITHUB_ENV overrides the flags inside CMake's toolchain file.
+          echo "PATH=$PATH" >> "$GITHUB_ENV"
+          echo "CEDAR_TOOLCHAIN_DIR=$CEDAR_TOOLCHAIN_DIR" >> "$GITHUB_ENV"
+          echo "CEDAR_CFLAGS=$CEDAR_CFLAGS" >> "$GITHUB_ENV"
+          echo "CEDAR_CXXFLAGS=$CEDAR_CXXFLAGS" >> "$GITHUB_ENV"
+          echo "CEDAR_LDFLAGS=$CEDAR_LDFLAGS" >> "$GITHUB_ENV"
+          aarch64-buildroot-linux-gnu-gcc --version | head -1
+          aarch64-buildroot-linux-gnu-ld --version | head -1
+
+      - name: Cache dependency sources
+        uses: actions/cache@v4
+        with:
+          path: .nextui-build/src
+          key: nextui-deps-src-cedar-${{ hashFiles('scripts/nextui/build-deps.sh', 'scripts/nextui/ffmpeg/h264_cedardec.c') }}
+
+      - name: Build dependencies (FFmpeg with h264_cedar, libmpv, libass)
+        run: CFLAGS="$CEDAR_CFLAGS" CXXFLAGS="$CEDAR_CXXFLAGS" LDFLAGS="$CEDAR_LDFLAGS" ./scripts/nextui/build-deps.sh
+
+      - name: Build wiliwili
+        run: ./scripts/nextui/build-wiliwili.sh
+
+      - name: Build the on-device decode tester
+        run: ./scripts/nextui/cedar/make-tester
+
+      - name: Package pak
+        run: ./scripts/nextui/make-pak.sh
+
+      - name: Verify the pak
+        run: |
+          {
+            echo "### NextUI tg5040 CedarX build"
+            echo
+            echo "- libavcodec: $(pkg-config --modversion libavcodec)"
+            echo "- libmpv: $(pkg-config --modversion mpv)"
+            echo "- pakz: $(du -h dist/WiliWili.pakz | cut -f1), sha256 $(sha256sum dist/WiliWili.pakz | cut -d' ' -f1)"
+            echo "- h264_cedar in libavcodec: $(strings dist/WiliWili.pak/lib/libavcodec.so.60 | grep -c '^h264_cedar$') match(es)"
+            echo "- h264_mp4toannexb bsf: $(strings dist/WiliWili.pak/lib/libavcodec.so.60 | grep -c '^h264_mp4toannexb$') match(es)"
+            echo "- decode tester: $(ls -l dist/WiliWili.pak/bin/cedar-decode 2>/dev/null | awk '{print $5}') bytes"
+            echo "- SemTimedWait exported by wiliwili: $(nm -D build-nextui/wiliwili | grep -c ' T SemTimedWait$')"
+            echo "- glibc symbols needed by bin/wiliwili: $(readelf -V dist/WiliWili.pak/bin/wiliwili | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)"
+            echo "- glibc symbols needed by libavcodec: $(readelf -V dist/WiliWili.pak/lib/libavcodec.so.60 | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)"
+            echo
+            echo "Bundled libraries:"
+            echo '```'
+            ls dist/WiliWili.pak/lib
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          # Fail early instead of shipping a pak without the decoder.
+          strings dist/WiliWili.pak/lib/libavcodec.so.60 | grep -qx h264_cedar
+          strings dist/WiliWili.pak/lib/libavcodec.so.60 | grep -qx h264_mp4toannexb
+          test -x dist/WiliWili.pak/bin/cedar-decode
+          # The pak binary is stripped, so check the linked one.
+          nm -D build-nextui/wiliwili | grep -q ' T SemTimedWait$'
+
+      - name: Upload pakz
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: WiliWili-tg5040-cedar-pakz
+          path: dist/WiliWili.pakz
+          if-no-files-found: error
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: WiliWili-tg5040-cedar-logs
+          path: |
+            .nextui-build/deps/meson-logs/
+            build-nextui/CMakeCache.txt
+          if-no-files-found: ignore

@@ -132,6 +132,7 @@ extern mpvClientApiVersionFunc mpvClientApiVersion;
 #define mpvClientApiVersion mpv_client_api_version
 #endif
 
+
 class MPVCore : public brls::Singleton<MPVCore> {
 public:
     MPVCore();
@@ -158,6 +159,15 @@ public:
 
     // todo: remove these sync function
     std::string getString(const std::string &key);
+
+    // Name of the hardware decoder actually in use, for the player info and
+    // the log: the CedarX decoder lives in FFmpeg, so mpv's hwdec-current
+    // does not see it.
+    std::string hardwareDecoderName();
+
+    // Sets hwCurrent (and logs "HW:") once the CedarX decoder has produced a
+    // picture for the current file.
+    void reportHardwareDecoder();
     double getDouble(const std::string &key);
     int64_t getInt(const std::string &key);
     std::unordered_map<std::string, mpv_node> getNodeMap(const std::string &key);
@@ -362,6 +372,11 @@ public:
 
     // 硬件解码
     inline static bool HARDWARE_DEC = false;
+
+    // 不使用 mpv hwdec，而是由 FFmpeg 中的独立解码器 (h264_cedar) 调用设备厂商
+    // 解码库，见 view/mpv_cedar.hpp。由「硬件解码」设置直接控制，仅
+    // NEXTUI_TG5040 使用。
+    inline static bool CEDAR_DEC = false;
 
     // 硬解方式
 #if defined(__SWITCH__) || defined(BOREALIS_USE_GXM)

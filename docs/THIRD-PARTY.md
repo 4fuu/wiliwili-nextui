@@ -16,6 +16,7 @@ prebuilt community binary is redistributed.
 | OpenSSL | 1.1 (vendor SDK) | OpenSSL/SSLeay (GPL-compatible) | `lib/libssl.so.1.1`, `lib/libcrypto.so.1.1` | no, SDK |
 | libstdc++ / libgcc | gcc 8.3 (toolchain) | GPL-3.0-with-GCC-exception / GPL-3.0-with-GCC-exception | `lib/` | no, toolchain |
 | SDL2, GLESv2/EGL, ALSA, zlib, FreeType, libpng | vendor SDK | zlib / MIT / LGPL-2.1 / zlib / FTL / libpng | no | device-provided |
+| CedarC vendor decoder (`h264_cedar` loads it at run time; never bundled) | 1.3.0 | vendor firmware library | no | device-provided |
 
 Notes:
 
@@ -27,3 +28,7 @@ Notes:
 - The licenses of the built components are available in their respective
   source archives (pinned in `scripts/nextui/build-deps.sh`); this file and the
   repository `LICENSE` are shipped inside the pak under `licenses/`.
+- The `h264_cedar` FFmpeg decoder (`scripts/nextui/ffmpeg/h264_cedardec.c`,
+  optional tg5040 build only) is derived from moonlight-tsp's CedarC wrapper,
+  Copyright (c) isalin, GPL-3.0-or-later, and is distributed under the same
+  license; its ABI declarations are shared with `scripts/nextui/cedar/`.
