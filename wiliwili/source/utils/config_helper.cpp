@@ -256,6 +256,13 @@ std::unordered_map<SettingItem, ProgramOption> ProgramConfig::SETTING_MAP = {
 #elif defined(__SWITCH__)
     {SettingItem::PLAYER_INMEMORY_CACHE,
      {"player_inmemory_cache", {"0MB", "10MB", "20MB", "50MB", "100MB"}, {0, 10, 20, 50, 100}, 0}},
+#elif defined(NEXTUI_TG5040)
+    // The Bilibili CDN answers with a variable ~50 ms RTT here, and with a
+    // small cache mpv reports "paused for cache" and resumes 1.5-2 s later.
+    // 64 MiB forward absorbs that jitter; 16 MiB back keeps seeks cheap on a
+    // 1 GB device. 0 is kept for memory-constrained A/B runs.
+    {SettingItem::PLAYER_INMEMORY_CACHE,
+     {"player_inmemory_cache", {"0MB", "32MB", "64MB", "128MB"}, {0, 32, 64, 128}, 2}},
 #else
     {SettingItem::PLAYER_INMEMORY_CACHE,
      {"player_inmemory_cache", {"0MB", "10MB", "20MB", "50MB", "100MB"}, {0, 10, 20, 50, 100}, 1}},

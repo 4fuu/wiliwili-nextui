@@ -40,7 +40,7 @@ void VideoProfile::update() {
         brls::Application::contentHeight, brls::Application::windowWidth, brls::Application::windowHeight));
     labelVideoCodec->setText(mpvCore->getString("video-codec"));
     labelVideoPixel->setText(mpvCore->getString("video-params/pixelformat"));
-    labelVideoHW->setText(mpvCore->getString("hwdec-current"));
+    labelVideoHW->setText(mpvCore->hardwareDecoderName());
     labelVideoBitrate->setText(std::to_string(mpvCore->getInt("video-bitrate") / 1024) + "kbps");
     labelVideoDrop->setText(fmt::format("{} (decoder) {} (output)", mpvCore->getInt("decoder-frame-drop-count"),
                                         mpvCore->getInt("frame-drop-count")));

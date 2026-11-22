@@ -159,6 +159,15 @@ public:
 
     // todo: remove these sync function
     std::string getString(const std::string &key);
+
+    // Name of the hardware decoder actually in use, for the player info and
+    // the log: the CedarX decoder lives in FFmpeg, so mpv's hwdec-current
+    // does not see it.
+    std::string hardwareDecoderName();
+
+    // Sets hwCurrent (and logs "HW:") once the CedarX decoder has produced a
+    // picture for the current file.
+    void reportHardwareDecoder();
     double getDouble(const std::string &key);
     int64_t getInt(const std::string &key);
     std::unordered_map<std::string, mpv_node> getNodeMap(const std::string &key);

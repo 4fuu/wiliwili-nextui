@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <clocale>
 #include <cmath>
+#include <algorithm>
 #include <pystring.h>
 #include <borealis/core/thread.hpp>
 #include <borealis/core/application.hpp>
@@ -359,7 +360,14 @@ void MPVCore::init() {
         // cache
         brls::Logger::info("set memory cache: {}MB", MPVCore::INMEMORY_CACHE);
         mpvSetOptionString(mpv, "demuxer-max-bytes", fmt::format("{}MiB", MPVCore::INMEMORY_CACHE).c_str());
+#ifdef NEXTUI_TG5040
+        // A large read-ahead absorbs the CDN's RTT jitter; the back buffer
+        // stays small so a seek does not wait on a refill of the forward one.
+        mpvSetOptionString(mpv, "demuxer-max-back-bytes",
+                           fmt::format("{}MiB", std::max(16, MPVCore::INMEMORY_CACHE / 4)).c_str());
+#else
         mpvSetOptionString(mpv, "demuxer-max-back-bytes", fmt::format("{}MiB", MPVCore::INMEMORY_CACHE / 2).c_str());
+#endif
     } else {
         mpvSetOptionString(mpv, "cache", "no");
     }
@@ -427,6 +435,7 @@ void MPVCore::init() {
     check_error(mpvObserveProperty(mpv, 13, "playback-abort", MPV_FORMAT_FLAG));
     check_error(mpvObserveProperty(mpv, 14, "seeking", MPV_FORMAT_FLAG));
     check_error(mpvObserveProperty(mpv, 15, "hwdec-current", MPV_FORMAT_STRING));
+    check_error(mpvObserveProperty(mpv, 22, "video-params/pixelformat", MPV_FORMAT_STRING));
     check_error(mpvObserveProperty(mpv, 16, "path", MPV_FORMAT_STRING));
     check_error(mpvObserveProperty(mpv, 17, "brightness", MPV_FORMAT_DOUBLE));
     check_error(mpvObserveProperty(mpv, 18, "contrast", MPV_FORMAT_DOUBLE));
@@ -1134,11 +1143,14 @@ void MPVCore::eventMainLoop() {
                         }
                         break;
                     case 15:
-                        if (data) {
-                            hwCurrent = *(char **)data;
-                            brls::Logger::info("========> HW: {}", hwCurrent);
-                            GA("hwdec", {{"hwdec", hwCurrent}})
-                        }
+                        // hwdec-current only changes for mpv's own hwaccels;
+                        // the decoder name is checked when a file starts.
+                        if (data) hwCurrent = *(char **)data;
+                        break;
+                    case 22:
+                        // A new file: the decoder is only known once it has
+                        // produced a picture.
+                        reportHardwareDecoder();
                         break;
                     case 16:
                         if (data) filepath = *(char **)data;
@@ -1326,6 +1338,31 @@ int MPVCore::getGamma() const { return video_gamma; }
 int MPVCore::getHue() const { return video_hue; }
 
 // todo: remove these sync function
+void MPVCore::reportHardwareDecoder() {
+    if (!CEDAR_DEC || getString("vd") != "h264_cedar") return;
+    brls::sync([this]() {
+        std::string format = getString("video-params/pixelformat");
+        if (format != "nv21" && format != "nv12") return;
+        // The CedarX decoder produced the picture: this is the real answer
+        // for "is hardware decode on", while hwdec-current says "no".
+        if (hwCurrent == "h264_cedar") return;
+        hwCurrent = "h264_cedar";
+        brls::Logger::info("========> HW: {}", hwCurrent);
+        GA("hwdec", {{"hwdec", hwCurrent}})
+    });
+}
+
+std::string MPVCore::hardwareDecoderName() {
+    // "hwdec-current" only reports mpv's own hwaccel framework, which a
+    // decoder living in FFmpeg (h264_cedar) does not use: it stays "no" while
+    // the hardware decoder is the one running. Report what actually decodes.
+    if (CEDAR_DEC && getString("vd") == "h264_cedar") {
+        std::string format = getString("video-params/pixelformat");
+        if (format == "nv21" || format == "nv12") return "h264_cedar";
+    }
+    return getString("hwdec-current");
+}
+
 std::string MPVCore::getString(const std::string &key) {
     char *value = nullptr;
     mpvGetProperty(mpv, key.c_str(), MPV_FORMAT_STRING, &value);
