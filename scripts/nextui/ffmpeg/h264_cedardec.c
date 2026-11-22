@@ -454,6 +454,8 @@ typedef struct H264CedarContext {
     CedarVideoPicture *queued[CEDAR_MAX_QUEUED]; /* decoded, not yet handed out */
     int nqueued;
     int dropped;         /* pictures the engine handed back as errors */
+    int collected;       /* pictures the engine handed back at all */
+    int collected_total; /* ... and across the run, for the trace */
     int copy_failures;   /* pictures that could not be turned into a frame */
     int decoded;         /* at least one picture came out */
     const char *closing_reason; /* for the trace */
@@ -844,6 +846,16 @@ static void cedar_collect_pictures(AVCodecContext *avctx)
     CedarVideoPicture *pic;
 
     while ((pic = cedar_api->request_picture(ctx->handle, 0)) != NULL) {
+        /*
+         * The first pictures the engine hands back tell whether the parser
+         * released the first access unit at all; every dropped picture is a
+         * lost frame and is reported below even without a trace.
+         */
+        if (ctx->collected < 10 && cedar_verbose())
+            cedar_note("picture out of the engine: pts %lld, error flag %d",
+                       (long long)pic->nPts, pic->bFrameErrorFlag);
+        ctx->collected++;
+        ctx->collected_total++;
         if (pic->bFrameErrorFlag || ctx->nqueued >= CEDAR_MAX_QUEUED) {
             /*
              * A dropped picture is a lost frame, never silent: a wrong or
@@ -851,18 +863,15 @@ static void cedar_collect_pictures(AVCodecContext *avctx)
              */
             ctx->dropped++;
             if (ctx->dropped <= 10)
-                cedar_note("picture pts %lld dropped (error flag %d, "
+                cedar_warn("picture pts %lld dropped (error flag %d, "
                            "queue %d)", (long long)pic->nPts,
                            pic->bFrameErrorFlag, ctx->nqueued);
             cedar_api->return_picture(ctx->handle, pic);
             continue;
         }
-        if (cedar_verbose() && ctx->submitted <= 3)
-            cedar_note("picture out of the engine: pts %lld, error flag %d",
-                       (long long)pic->nPts, pic->bFrameErrorFlag);
         ctx->queued[ctx->nqueued++] = pic;
     }
-    if (cedar_verbose() && ctx->submitted <= 3)
+    if (ctx->submitted <= 3 && cedar_verbose() && ctx->nqueued > 0)
         cedar_note("after %d access units: %d pictures queued, %d dropped",
                    ctx->submitted, ctx->nqueued, ctx->dropped);
 }
@@ -873,8 +882,8 @@ static void cedar_collect_pictures(AVCodecContext *avctx)
  * from several releases can still hold them out of order; libavcodec and
  * mpv both want a monotonic timeline.
  */
-static void cedar_take_picture(AVCodecContext *avctx, AVFrame *frame,
-                               int *got_picture)
+static int cedar_take_picture(AVCodecContext *avctx, AVFrame *frame,
+                              int *got_picture)
 {
     H264CedarContext *ctx = avctx->priv_data;
     CedarVideoPicture *pic;
@@ -882,7 +891,7 @@ static void cedar_take_picture(AVCodecContext *avctx, AVFrame *frame,
 
     *got_picture = 0;
     if (ctx->nqueued == 0)
-        return;
+        return 0;
     for (i = 1; i < ctx->nqueued; i++)
         if (ctx->queued[i]->nPts < ctx->queued[best]->nPts)
             best = i;
@@ -918,6 +927,43 @@ static void cedar_take_picture(AVCodecContext *avctx, AVFrame *frame,
         *got_picture = 1;
     }
     cedar_api->return_picture(ctx->handle, pic);
+    return ret;
+}
+
+/*
+ * Take everything the engine has finished and hand out the oldest picture.
+ * The engine may make more pictures available once one has been returned,
+ * so keep asking until two rounds in a row bring nothing; two, because a
+ * single empty round can be the engine releasing a picture asynchronously.
+ * A copy that fails is an error and not something to hide: the caller has
+ * already counted this picture as decoded.
+ */
+static int cedar_drain(AVCodecContext *avctx, AVFrame *frame, int *got_picture)
+{
+    H264CedarContext *ctx = avctx->priv_data;
+    int empty = 0;
+
+    *got_picture = 0;
+    while (empty < 2) {
+        int before = ctx->collected_total;
+
+        cedar_collect_pictures(avctx);
+        if (ctx->nqueued > 0) {
+            if (!*got_picture) {
+                cedar_take_picture(avctx, frame, got_picture);
+                if (!*got_picture) {
+                    cedar_warn("picture could not be turned into a frame");
+                    return AVERROR_EXTERNAL;
+                }
+            }
+            empty = 0;
+        } else if (ctx->collected_total == before) {
+            empty++;
+        } else {
+            empty = 0;
+        }
+    }
+    return 0;
 }
 
 static int cedar_step(AVCodecContext *avctx, AVFrame *frame, int *got_picture)
@@ -934,9 +980,16 @@ static int cedar_step(AVCodecContext *avctx, AVFrame *frame, int *got_picture)
     case CEDAR_RESULT_KEYFRAME_DECODED:
         if (ctx->pending_frames > 0)
             ctx->pending_frames--;
-        /* Take everything the engine finished, then hand out the oldest. */
-        cedar_collect_pictures(avctx);
-        cedar_take_picture(avctx, frame, got_picture);
+        /*
+         * Hand out the oldest finished picture. The engine can release the
+         * next ones only after a picture has been returned to it, so a
+         * single round of request/take would leave those behind until the
+         * next decode call, or forever at the end of the stream.
+         */
+        if (cedar_drain(avctx, frame, got_picture) < 0) {
+            cedar_failed = 1;
+            return AVERROR_INVALIDDATA;
+        }
         ctx->decoded = 1;
         return 0;
     case CEDAR_RESULT_NO_BITSTREAM:
