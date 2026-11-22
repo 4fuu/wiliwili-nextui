@@ -1,6 +1,6 @@
 #!/bin/sh
 # Sets up the tg5040 cross toolchain for a full wiliwili build (see
-# nextui-tg5040-cedar.yml):
+# .github/workflows/nextui-tg5040.yml):
 #
 #   eval "$(./scripts/nextui/cedar/toolchain.sh)"
 #

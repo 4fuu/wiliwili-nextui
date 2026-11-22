@@ -15,7 +15,7 @@ The only community material consulted was the build *approach*; every binary in
 | Area | Status |
 |---|---|
 | UI | GLES3 via SDL2 + nanovg, 1024x768 panel; UI scale defaults to 480p (1.2x) and can be raised to 400p (1.44x) |
-| Video | libmpv render API (`vo=gpu`) with FFmpeg **software** decode |
+| Video | libmpv render API (`vo=gpu`); FFmpeg software decode by default, optional CedarX hardware decode for H.264 |
 | Audio | ALSA (mpv `ao=alsa`, SDL audio as fallback) |
 | Input | SDL GameController; the device's `js0` reports "Xbox 360 Controller", remapped to the Switch-labelled buttons by default |
 | Login | QR code login (Bilibili app scan) |
@@ -27,18 +27,23 @@ The only community material consulted was the build *approach*; every binary in
 
 ## Known limits
 
-- **Hardware video decode is opt-in and H.264 only.** The default build is
-  software-only (480p solid, 720p30 usable, 1080p not). The opt-in CedarX
-  build (`nextui-tg5040-cedar.yml`, see `scripts/nextui/cedar/README.md`)
-  adds the `h264_cedar` FFmpeg decoder, which drives the device's vendor
-  decoder. The "hardware decode" switch in Settings → Playback picks it
-  directly: on forces h264_cedar for every file, off keeps the software
-  decoder. There is no availability probe; a stream the vendor decoder cannot
-  handle shows up as a decode error. Set `H264_CEDAR_TRACE=1` in the launch
-  environment for per-call diagnostics. HEVC is not wired up. Either way the
-  build caps landscape quality at 720P (64) and portrait at 480P (32); the
+- **Hardware video decode is opt-in and H.264 only.** The tg5040 build
+  includes the `h264_cedar` FFmpeg decoder (see `scripts/nextui/cedar/README.md`),
+  which drives the device's vendor decoder through the bundled FFmpeg. The
+  "hardware decode" switch in Settings → Playback picks it directly: on forces
+  h264_cedar for every file, off keeps the software decoder. Software decode is
+  the default. There is no availability probe; a stream the vendor decoder
+  cannot handle shows up as a decode error. Set `H264_CEDAR_TRACE=1` in the
+  launch environment for per-call diagnostics. HEVC is not wired up. Either way
+  the build caps landscape quality at 720P (64) and portrait at 480P (32); the
   default is 720P. `PLAYER_LOW_QUALITY` is on by default in wiliwili and skips
   the loop filter, which matters a lot for the software decoder on this SoC.
+- **CedarX drops frames at the ends of a stream.** Device testing shows the
+  vendor parser does not release the first decoded picture and may leave up to
+  three pictures in the decoder at the end: one frame at the start and about
+  0.1 s at the end are missing. Playback stays smooth and audio stays in sync,
+  and software decode has no such loss. This is a CedarX vendor behaviour, not
+  an FFmpeg or mpv timestamp problem.
 - **No on-screen keyboard.** QR login works; text search, comments, password
   login and other text entry do not. This is a platform limitation, not a bug in
   the port.

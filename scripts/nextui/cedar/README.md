@@ -53,27 +53,32 @@ pictures are NV21, stride = width, no crop, contiguous ION memory.
 ## The FFmpeg decoder
 
 `h264_cedardec.c` is a plain `AVCodec` named `h264_cedar` (not an hwaccel):
-it feeds Annex-B access units to the vendor parser, copies each NV21 picture
-out of its ION buffer into a normal `AVFrame`, and reports `EAGAIN` while the
-vendor parser is still busy. It is built only in the opt-in
-`nextui-tg5040-cedar.yml` build; on any device without the vendor libraries
+it converts incoming packets to Annex-B, feeds one access unit at a time to
+the vendor parser, copies each NV21 picture out of its ION buffer into a
+normal `AVFrame`, and passes the packet's pts through to that frame. It is
+built by the default `.github/workflows/nextui-tg5040.yml` build; software
+decode remains the runtime default. On a device without the vendor libraries
 it fails to open like any other decoder.
 
 wiliwili selects it from `view/mpv_cedar.hpp` when the "hardware decode"
 setting is on: `vd=h264_cedar` is forced for every file, and the switch off
-keeps mpv's software decoder. There is no availability probe. The decode loop
-follows the engine path proven on this device (moonlight-nextui's
-`cedar_sdl.c`, itself derived from this spike): one access unit per submit,
-`NO_BITSTREAM`/`CONTINUE` mean "needs more input" and are retried, and every
+keeps mpv's software decoder. There is no availability probe. "Needs more
+input" is handled by consuming the packet and letting libavcodec feed the
+next one; an old-style decode callback must never return `EAGAIN`. Every
 failure returns an FFmpeg error instead of aborting. Diagnostics are off by
 default; `H264_CEDAR_TRACE=1` in the environment turns on per-call tracing.
+
+Known vendor behaviour: the parser drops the first picture and may leave up
+to three pictures in the decoder at the end of a stream. Roughly one frame at
+the start and 0.1 s at the end are missing; playback and A/V sync are not
+affected, and software decode does not have this behaviour.
 
 ## Toolchain
 
 The vendor SDK's Linaro 7.5 toolchain cannot build this stack: its sysroot has
 glibc 2.25 (no `sem_clockwait`, which libavcodec needs) and its ld has no
-`--export-dynamic-symbol` (libsbm must bind to our `SemTimedWait`). The
-optional CI build keeps the vendor sysroot for SDL2/GLES/ALSA/OpenSSL and
+`--export-dynamic-symbol` (libsbm must bind to our `SemTimedWait`). The tg5040
+build keeps the vendor sysroot for SDL2/GLES/ALSA/OpenSSL and
 puts Bootlin's `aarch64--glibc--stable-2020.08-1` (glibc 2.31, below the
 device's 2.33) in front for the C library and linker. `toolchain.sh` writes
 the `libc.so`/`libpthread.so` link scripts and the matching flags.
