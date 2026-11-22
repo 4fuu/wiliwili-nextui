@@ -11,19 +11,9 @@
  *
  *   cedar-decode test720p60.264          # 0 = every frame decoded
  *   cedar-decode -q test720p60.264       # quiet: summary only
+ *   cedar-decode -n 60 file.264          # stop after 60 frames
  *   cedar-decode -f 30 file.264          # source frame rate, for the pts
  *   cedar-decode -s 1000 -f 30 file.264  # pts 0/1000/2000 in 1/1000 ticks
- *
- * The vendor parser is believed to drop the first picture it sees and to
- * hold the last few, so one run can try the ways of pushing those out:
- *
- *   -S split    parameter sets alone, then the rest of the first unit
- *   -S repeat   the first access unit sent twice
- *   -S aud      an access unit delimiter before the first unit
- *   -S all      all three
- *   -t N        the last N access units and N delimiters sent again after
- *               the end, each with a pts of its own (a frame that comes
- *               back with such a pts is one the engine held)
  *
  * The h264_cedar decoder itself writes its trace to stderr when
  * H264_CEDAR_TRACE=1 is set; this tool sets it unless -q is given.
@@ -32,7 +22,8 @@
  * 1/1000, which is what mpv does with the packet timestamps it gets from the
  * container. If the frame pts printed per frame are not i*step, or frame
  * pts differs from picture pts in the h264_cedar trace, the timeline the
- * player sees is wrong.
+ * player sees is wrong. The decoder hands out N frames for N access units;
+ * the summary says so when it does not.
  *
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -52,7 +43,6 @@
 struct au {
     const uint8_t *data;
     size_t size;
-    int64_t pts;   /* this tool's own, in 1/1000 */
 };
 
 static uint8_t *read_file(const char *path, size_t *len)
@@ -244,34 +234,56 @@ static int is_h264(const uint8_t *au, size_t size)
     return type == 1 || type == 5 || type == 7 || type == 8 || type == 9;
 }
 
-/*
- * One run of one file. The vendor parser is believed to drop the first
- * picture it sees and the last few it holds, so the tester can try the
- * documented ways of pushing those out, one per run, and report what came
- * back:
- *   -s split    parameter sets alone as one packet, then the rest of the
- *               first access unit, then the stream as usual
- *   -s repeat   the first access unit submitted twice
- *   -s aud      an access unit delimiter submitted before the first unit
- *   -s trailing n access units repeated after the last one, then n access
- *               unit delimiters, each with a pts of its own
- */
 static int g_width, g_height;
 
-static size_t read_stream(const char *path, struct au **aus, uint8_t **buf,
-                          size_t *len, int64_t step, int quiet)
+int main(int argc, char **argv)
 {
-    size_t nau, i;
+    const AVCodec *codec;
+    AVCodecContext *ctx;
+    AVPacket *pkt;
+    AVFrame *frame;
+    struct au *aus = NULL;
+    uint8_t *data;
+    size_t len, nau, i, sent = 0, frames = 0, errors = 0;
+    int quiet = 0, limit = 0, opt, ret;
+    int fps = 30;
+    int64_t step = 0;   /* pts step in the 1/1000 time base */
 
-    *buf = read_file(path, len);
-    if (!*buf)
-        return 0;
+    while ((opt = getopt(argc, argv, "qn:f:s:")) != -1) {
+        switch (opt) {
+        case 'q': quiet = 1; break;
+        case 'n': limit = atoi(optarg); break;
+        case 'f': fps = atoi(optarg); break;
+        case 's': step = atoll(optarg); break;
+        default:
+            fprintf(stderr, "usage: %s [-q] [-n frames] [-f fps] [-s pts_step] "
+                            "file.264\n", argv[0]);
+            return 2;
+        }
+    }
+    if (optind != argc - 1) {
+        fprintf(stderr, "usage: %s [-q] [-n frames] [-f fps] [-s pts_step] "
+                        "file.264\n", argv[0]);
+        return 2;
+    }
+    if (fps <= 0)
+        fps = 30;
+    if (step <= 0)
+        step = 1000 / fps > 0 ? 1000 / fps : 1;
+    if (!quiet && !getenv("H264_CEDAR_TRACE"))
+        setenv("H264_CEDAR_TRACE", "1", 0);
+
+    data = read_file(argv[optind], &len);
+    if (!data) {
+        perror(argv[optind]);
+        return 1;
+    }
     if (!quiet) {
         size_t k;
 
         fprintf(stderr, "cedar-decode: first bytes of the file: ");
-        for (k = 0; k < *len && k < 32; k++)
-            fprintf(stderr, "%02x ", (*buf)[k]);
+        for (k = 0; k < len && k < 32; k++)
+            fprintf(stderr, "%02x ", data[k]);
         fputc('\n', stderr);
     }
     /*
@@ -280,81 +292,40 @@ static size_t read_stream(const char *path, struct au **aus, uint8_t **buf,
      * container's avcC extradata that a bare payload does not have), then
      * split into access units like any other Annex-B stream.
      */
-    if (is_avcc(*buf, *len)) {
+    if (is_avcc(data, len)) {
         size_t conv_len = 0;
-        uint8_t *conv = avcc_to_annexb(*buf, *len, &conv_len);
+        uint8_t *conv = avcc_to_annexb(data, len, &conv_len);
 
         if (!conv || conv_len == 0) {
             fprintf(stderr, "AVCC to Annex-B conversion failed\n");
-            free(*buf);
-            return 0;
+            return 1;
         }
         fprintf(stderr, "cedar-decode: AVCC input, converted to Annex-B "
                         "(%zu bytes)\n", conv_len);
-        free(*buf);
-        *buf = conv;
-        *len = conv_len;
+        free(data);
+        data = conv;
+        len = conv_len;
     } else {
         fprintf(stderr, "cedar-decode: Annex-B input\n");
     }
-    nau = split_aus(*buf, *len, aus);
-    for (i = 0; i < nau; i++)
-        (*aus)[i].pts = (int64_t)i * step;
-    return nau;
-}
 
-struct strategy {
-    int split, repeat, aud, trailing;
-};
-
-/* The first NALs of an access unit up to and including the first slice. */
-static size_t head_len(const struct au *au)
-{
-    const uint8_t *d = au->data, *end = d + au->size;
-    size_t sc, i;
-
-    for (i = 0; i + 4 <= au->size; i++) {
-        int type;
-
-        if (i + 4 <= au->size && !d[i] && !d[i + 1] && !d[i + 2] && d[i + 3] == 1)
-            sc = 4;
-        else if (!d[i] && !d[i + 1] && d[i + 2] == 1)
-            sc = 3;
-        else
-            continue;
-        type = d[i + sc] & 0x1f;
-        if (type == 1 || type == 5)
-            return (size_t)((d + i) - d);
-        i += sc - 1;
-    }
-    (void)end;
-    return 0;
-}
-
-/*
- * Decode one stream, one access unit per packet, and print what comes out.
- * Returns 0 when every picture that was fed came back, 1 otherwise.
- */
-static int run_one(const char *path, const struct strategy *st, int quiet,
-                   int fps, int64_t step, size_t *fed, size_t *got)
-{
-    const AVCodec *codec;
-    AVCodecContext *ctx;
-    AVPacket *pkt;
-    AVFrame *frame;
-    struct au *aus = NULL;
-    uint8_t *data;
-    size_t len, nau, i, frames = 0, errors = 0;
-    int ret;
-
-    nau = read_stream(path, &aus, &data, &len, step, quiet);
+    nau = split_aus(data, len, &aus);
     if (!nau) {
-        perror(path);
+        fprintf(stderr, "no H.264 access units found\n");
+        free(data);
         return 1;
     }
-    if (!quiet)
-        fprintf(stderr, "cedar-decode: %s, %zu bytes, %zu access units, first "
-                        "start code %zu bytes\n", path, len, nau, g_first_sc);
+    fprintf(stderr, "cedar-decode: %s, %zu bytes, %zu access units, first "
+                    "start code %zu bytes\n", argv[optind], len, nau,
+            g_first_sc);
+    if (!quiet) {
+        size_t k;
+
+        fprintf(stderr, "cedar-decode: first bytes fed to the decoder: ");
+        for (k = 0; k < len && k < 32; k++)
+            fprintf(stderr, "%02x ", data[k]);
+        fputc('\n', stderr);
+    }
     /* h264_cedar only decodes H.264; say so instead of feeding HEVC to it. */
     for (i = 0; i < nau; i++) {
         if (is_h264(aus[i].data, aus[i].size))
@@ -370,9 +341,9 @@ static int run_one(const char *path, const struct strategy *st, int quiet,
 
     {
         /*
-         * The size from the stream itself: one picture is enough for the
-         * SPS to be parsed, and anything the software decoder prints on the
-         * way is suppressed (the app gets the size from mpv instead).
+         * Size from the first access unit only: one picture is enough for
+         * the SPS to be parsed, and anything the software decoder prints on
+         * the way is suppressed (the app gets the size from mpv instead).
          */
         const AVCodec *sw = avcodec_find_decoder(AV_CODEC_ID_H264);
         AVCodecContext *sctx = sw ? avcodec_alloc_context3(sw) : NULL;
@@ -384,6 +355,12 @@ static int run_one(const char *path, const struct strategy *st, int quiet,
 
             av_log_set_level(AV_LOG_QUIET);
             avcodec_open2(sctx, sw, NULL);
+            /*
+             * Annex-B: the decoder parses the parameter sets from the
+             * packet itself. A file that starts with SEI or AUD is skipped
+             * as non-VCL and its first frame is not a picture, so look
+             * through every access unit until one parses.
+             */
             for (i = 0; i < nau && (sctx->width <= 0 || sctx->height <= 0); i++) {
                 spkt->data = (uint8_t *)aus[i].data;
                 spkt->size = (int)aus[i].size;
@@ -417,8 +394,7 @@ static int run_one(const char *path, const struct strategy *st, int quiet,
     if (g_width > 0 && g_height > 0) {
         ctx->width  = g_width;
         ctx->height = g_height;
-        if (!quiet)
-            fprintf(stderr, "cedar-decode: SPS says %dx%d\n", g_width, g_height);
+        fprintf(stderr, "cedar-decode: SPS says %dx%d\n", g_width, g_height);
     }
     pkt = av_packet_alloc();
     frame = av_frame_alloc();
@@ -428,203 +404,84 @@ static int run_one(const char *path, const struct strategy *st, int quiet,
         return 1;
     }
 
-    {
-        int64_t next = aus[nau - 1].pts + step;
-        int64_t tail = 0;
-        size_t k;
+    for (i = 0; i < nau; i++) {
+        int eof = 0;
 
-        for (i = 0; i < nau; i++) {
-            int eof = 0;
+        if (getenv("CEDAR_DUMP_AU") && i == 0) {
+            const char *path = getenv("CEDAR_DUMP_AU");
+            FILE *f = fopen(path, "wb");
 
-            if (getenv("CEDAR_DUMP_AU") && i == 0) {
-                const char *dump = getenv("CEDAR_DUMP_AU");
-                FILE *f = fopen(dump, "wb");
-
-                if (f) {
-                    fwrite(aus[i].data, 1, aus[i].size, f);
-                    fclose(f);
-                    fprintf(stderr, "first access unit written to %s\n", dump);
-                }
+            if (f) {
+                fwrite(aus[i].data, 1, aus[i].size, f);
+                fclose(f);
+                fprintf(stderr, "first access unit written to %s\n", path);
             }
-            pkt->data = (uint8_t *)aus[i].data;
-            pkt->size = (int)aus[i].size;
-            pkt->pts = pkt->dts = aus[i].pts;
-            if (i == 0 && st->split) {
-                size_t h = head_len(&aus[0]);
+        }
+        pkt->data = (uint8_t *)aus[i].data;
+        pkt->size = (int)aus[i].size;
+        pkt->pts = pkt->dts = (int64_t)i * step;
+        ret = avcodec_send_packet(ctx, pkt);
+        sent++;
+        if (ret < 0) {
+            fprintf(stderr, "au %zu (%zu bytes): send_packet %d\n", i,
+                    aus[i].size, ret);
+            if (errors++ == 0) {
+                size_t k;
 
-                if (h > 0 && h < aus[0].size) {
-                    pkt->size = (int)h;
-                    ret = avcodec_send_packet(ctx, pkt);
-                    if (!quiet)
-                        fprintf(stderr, "strategy: parameter sets alone, "
-                                        "%zu bytes\n", h);
-                    pkt->data = (uint8_t *)aus[0].data + h;
-                    pkt->size = (int)(aus[0].size - h);
-                }
+                fprintf(stderr, "  first bytes: ");
+                for (k = 0; k < aus[i].size && k < 32; k++)
+                    fprintf(stderr, "%02x ", aus[i].data[k]);
+                fputc('\n', stderr);
             }
-            ret = avcodec_send_packet(ctx, pkt);
+        }
+        while (!eof) {
+            ret = avcodec_receive_frame(ctx, frame);
+            if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
+                break;
             if (ret < 0) {
-                fprintf(stderr, "au %zu (%zu bytes): send_packet %d\n", i,
-                        aus[i].size, ret);
+                fprintf(stderr, "au %zu: receive_frame %d\n", i, ret);
                 errors++;
+                eof = 1;
+                break;
             }
-            if (i == 0 && st->repeat) {
-                /* The whole first unit, not just the tail of a split one. */
-                pkt->data = (uint8_t *)aus[0].data;
-                pkt->size = (int)aus[0].size;
-                ret = avcodec_send_packet(ctx, pkt);
-                if (!quiet)
-                    fprintf(stderr, "strategy: first access unit sent twice\n");
-                if (ret < 0)
-                    errors++;
-            }
-            while (!eof) {
-                ret = avcodec_receive_frame(ctx, frame);
-                if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
-                    break;
-                if (ret < 0) {
-                    fprintf(stderr, "au %zu: receive_frame %d\n", i, ret);
-                    errors++;
-                    eof = 1;
-                    break;
-                }
-                frames++;
-                if (!quiet)
-                    fprintf(stderr, "frame %zu: %s %dx%d pts %lld (au %zu)\n",
-                            frames, av_get_pix_fmt_name(frame->format),
-                            frame->width, frame->height,
-                            (long long)frame->pts, i);
-                av_frame_unref(frame);
-            }
-        }
-        /*
-         * Push the end of the stream: repeat the last access units, then
-         * delimiters, each with a pts after the last real one. A picture
-         * that comes back with such a pts is a picture the engine held.
-         */
-        for (k = 0; k < (size_t)(st->trailing > 0 ? st->trailing : 0) * 2; k++) {
-            static const uint8_t aud[] = { 0, 0, 0, 1, 0x09, 0xf0 };
-            int eof = 0;
-
-            if (k < (size_t)st->trailing) {
-                size_t j = nau - (size_t)st->trailing + k;
-
-                pkt->data = (uint8_t *)aus[j].data;
-                pkt->size = (int)aus[j].size;
-                tail++;
-            } else {
-                pkt->data = (uint8_t *)aud;
-                pkt->size = sizeof(aud);
-            }
-            pkt->pts = pkt->dts = next + tail * step;
-            ret = avcodec_send_packet(ctx, pkt);
-            while (!eof && ret >= 0) {
-                ret = avcodec_receive_frame(ctx, frame);
-                if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
-                    break;
-                if (ret < 0) {
-                    errors++;
-                    break;
-                }
-                frames++;
-                if (!quiet)
-                    fprintf(stderr, "frame %zu (trailing): pts %lld\n", frames,
-                            (long long)frame->pts);
-                av_frame_unref(frame);
-            }
-        }
-        /* Flush whatever the decoder still holds. */
-        pkt->data = NULL;
-        pkt->size = 0;
-        pkt->pts = pkt->dts = AV_NOPTS_VALUE;
-        avcodec_send_packet(ctx, pkt);
-        while (avcodec_receive_frame(ctx, frame) == 0) {
             frames++;
             if (!quiet)
-                fprintf(stderr, "frame %zu (flush): pts %lld\n", frames,
-                        (long long)frame->pts);
+                fprintf(stderr, "frame %zu: %s %dx%d pts %lld (au %zu)\n", frames,
+                        av_get_pix_fmt_name(frame->format), frame->width,
+                        frame->height, (long long)frame->pts, i);
             av_frame_unref(frame);
+            if (limit && (int)frames >= limit) {
+                i = nau;
+                break;
+            }
         }
     }
-
+    /* Flush whatever the decoder still holds. */
+    pkt->data = NULL;
+    pkt->size = 0;
+    pkt->pts = pkt->dts = AV_NOPTS_VALUE;
+    avcodec_send_packet(ctx, pkt);
+    while (avcodec_receive_frame(ctx, frame) == 0) {
+        frames++;
+        if (!quiet)
+            fprintf(stderr, "frame %zu (flush): pts %lld\n", frames,
+                    (long long)frame->pts);
+        av_frame_unref(frame);
+    }
+    if (frames > nau)
+        fprintf(stderr, "cedar-decode: %zu access units in, %zu frames out "
+                        "(%zu repeated)\n", nau, frames, frames - nau);
     if (!quiet)
-        fprintf(stderr, "cedar-decode: pts step %lld in 1/1000\n",
-                (long long)step);
+        fprintf(stderr, "cedar-decode: pts step %lld in 1/1000, expected last "
+                        "frame pts %lld\n", (long long)step,
+                (long long)(nau - 1) * step);
 
     avcodec_free_context(&ctx);
     av_packet_free(&pkt);
     av_frame_free(&frame);
     free(aus);
     free(data);
-    *fed = nau;
-    *got = frames;
-    fprintf(stderr, "summary: %zu access units in, %zu frames out, %zu errors\n",
-            nau, frames, errors);
-    return frames >= nau && errors == 0 ? 0 : 1;
-}
-
-/*
- * The packets of one stream. The pts are this tool's own, in 1/1000: an
- * access unit is numbered i*step, which is what mpv does with the packet
- * timestamps it gets from a container. A raw Annex-B file has no container,
- * so the decoder continues from the last pts by one frame.
- */
-int main(int argc, char **argv)
-{
-    struct strategy st = { 0 };
-    const char *strategy = "none";
-    size_t fed = 0, got = 0;
-    int quiet = 0, opt, rc;
-    int fps = 30;
-    int64_t step = 0;   /* pts step in the 1/1000 time base */
-
-    while ((opt = getopt(argc, argv, "qf:s:S:t:")) != -1) {
-        switch (opt) {
-        case 'q': quiet = 1; break;
-        case 'f': fps = atoi(optarg); break;
-        case 's': step = atoll(optarg); break;
-        case 't': st.trailing = atoi(optarg); break;
-        case 'S':
-            strategy = optarg;
-            if (!strcmp(strategy, "split")) {
-                st.split = 1;
-            } else if (!strcmp(strategy, "repeat")) {
-                st.repeat = 1;
-            } else if (!strcmp(strategy, "aud")) {
-                st.aud = 1;
-            } else if (!strcmp(strategy, "all")) {
-                st.split = st.repeat = st.aud = 1;
-            } else if (!strcmp(strategy, "none")) {
-                st.split = st.repeat = st.aud = 0;
-            } else {
-                fprintf(stderr, "unknown strategy %s\n", strategy);
-                return 2;
-            }
-            break;
-        default:
-            fprintf(stderr, "usage: %s [-q] [-f fps] [-s pts_step] "
-                            "[-S none|split|repeat|aud|all] "
-                            "[-t trailing_units] file.264\n", argv[0]);
-            return 2;
-        }
-    }
-    if (optind != argc - 1) {
-        fprintf(stderr, "usage: %s [-q] [-f fps] [-s pts_step] "
-                        "[-S none|split|repeat|aud] [-t trailing_units] "
-                        "file.264\n", argv[0]);
-        return 2;
-    }
-    if (fps <= 0)
-        fps = 30;
-    if (step <= 0)
-        step = 1000 / fps > 0 ? 1000 / fps : 1;
-    if (!quiet && !getenv("H264_CEDAR_TRACE"))
-        setenv("H264_CEDAR_TRACE", "1", 0);
-
-    fprintf(stderr, "cedar-decode: strategy %s%s, %d trailing units\n",
-            strategy, st.aud ? " +aud" : "", st.trailing);
-    rc = run_one(argv[optind], &st, quiet, fps, step, &fed, &got);
-    fprintf(stderr, "verdict: %zu of %zu pictures out%s\n", got, fed,
-            got < fed ? " (lost)" : "");
-    return rc;
+    fprintf(stderr, "summary: sent %zu/%zu, frames %zu, errors %zu\n", sent, nau,
+            frames, errors);
+    return errors == 0 && frames > 0 ? 0 : 1;
 }
