@@ -379,6 +379,10 @@ void MPVCore::init() {
         // The decoder is chosen per file by setUrl(), from the setting at that
         // moment; no stale --vd survives a restart.
         brls::Logger::info("MPV video decoder: h264_cedar");
+        // H264_CEDAR_TRACE=1 in the launch environment also turns on mpv's
+        // decoder log, so a device trace shows the pts mpv hands over.
+        if (const char* trace = getenv("H264_CEDAR_TRACE"); trace && *trace && std::string(trace) != "0")
+            mpvSetOptionString(mpv, "msg-level", "vd=v");
     } else if (HARDWARE_DEC) {
         mpvSetOptionString(mpv, "hwdec", PLAYER_HWDEC_METHOD.c_str());
         brls::Logger::info("MPV hardware decode: {}", PLAYER_HWDEC_METHOD);

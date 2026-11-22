@@ -455,6 +455,11 @@ typedef struct H264CedarContext {
     CedarVideoPicture *queued[CEDAR_MAX_QUEUED]; /* decoded, not yet handed out */
     int nqueued;
     int decoded;         /* at least one picture came out */
+    const char *closing_reason; /* for the trace */
+    AVRational stream_fps;   /* from the SPS, for the pts fallback */
+    AVRational timebase;     /* packet time base, resolved once */
+    int64_t last_pts;        /* last real pts, in the packet time base */
+    int64_t frame_count;
     int64_t parse_deadline; /* when to stop waiting for the parser */
     int flushed;         /* trailing access unit submitted after EOF */
     int eof_returned;
@@ -485,9 +490,23 @@ static int cedar_open_decoder(AVCodecContext *avctx, int width, int height)
     info.eCodecFormat     = CEDAR_CODEC_H264;
     info.nWidth           = width;
     info.nHeight          = height;
-    /* The same frame timing the Cedar wrapper uses on this device. */
-    info.nFrameRate       = 60 * 1000;
-    info.nFrameDuration   = 1000000 / 60;
+    /*
+     * The engine wants the stream's frame timing; a live stream is 60 fps,
+     * a video file usually 24-30. avctx->framerate is filled from the SPS by
+     * libavcodec before the first picture arrives; 60 is only the fallback
+     * the wrapper uses.
+     */
+    {
+        AVRational fr = avctx->framerate;
+
+        if (fr.num <= 0 || fr.den <= 0) {
+            fr.num = 60;
+            fr.den = 1;
+        }
+        info.nFrameRate     = av_rescale(fr.num, 1000, fr.den);
+        info.nFrameDuration = av_rescale(1000, fr.den, fr.num);
+        ctx->stream_fps     = fr;
+    }
     info.bIsFramePackage  = 1;
 
     memset(&cfg, 0, sizeof(cfg));
@@ -536,9 +555,10 @@ static int cedar_open_decoder(AVCodecContext *avctx, int width, int height)
         cedar_warn("InitializeVideoDecoder failed (%d)", ret);
         return AVERROR_EXTERNAL;
     }
-    ctx->width   = width;
-    ctx->height  = height;
-    ctx->flushed = 0;
+    ctx->width    = width;
+    ctx->height   = height;
+    ctx->flushed  = 0;
+    ctx->last_pts = AV_NOPTS_VALUE;
     /*
      * mpv hands this decoder MP4-style packets: extradata with the SPS/PPS
      * and length-prefixed NAL units. The Cedar parser only understands
@@ -572,6 +592,8 @@ static void cedar_close_decoder(AVCodecContext *avctx)
 {
     H264CedarContext *ctx = avctx->priv_data;
 
+    if (!ctx->closing_reason)
+        ctx->closing_reason = "avcodec close";
     av_bsf_free(&ctx->annexb);
     if (!ctx->handle)
         return;
@@ -583,8 +605,9 @@ static void cedar_close_decoder(AVCodecContext *avctx)
      * Brick Pro aborted in CdcIonFree: leave it to the vendor library.
      */
     if (ctx->submitted) {
-        cedar_note("DestroyVideoDecoder after %d access units",
-                   ctx->submitted);
+        cedar_note("DestroyVideoDecoder after %d access units (%lld frames "
+                   "out, %s)", ctx->submitted, (long long)ctx->frame_count,
+                   ctx->closing_reason);
         cedar_api->destroy(ctx->handle);
     } else {
         cedar_note("decoder never received input; leaving it to the "
@@ -599,11 +622,54 @@ static void cedar_close_decoder(AVCodecContext *avctx)
  * one. The picture carries it back, which is how an output frame is matched
  * to the access unit it came from.
  */
-static int64_t cedar_pts(H264CedarContext *ctx, int64_t pts)
+/*
+ * The packet time base. libavcodec passes it in pkt_timebase; if a caller
+ * leaves it unset the stream's own time base is the closest thing, and 1/1000
+ * the last resort. Guessing wrong here stretches or compresses the whole
+ * timeline, so it is resolved once per decoder.
+ */
+static AVRational cedar_timebase(AVCodecContext *avctx, H264CedarContext *ctx)
 {
-    if (pts != AV_NOPTS_VALUE && pts > INT64_MIN / 2)
+    if (ctx->timebase.num > 0 && ctx->timebase.den > 0)
+        return ctx->timebase;
+    if (avctx->pkt_timebase.num > 0 && avctx->pkt_timebase.den > 0)
+        ctx->timebase = avctx->pkt_timebase;
+    else if (avctx->time_base.num > 0 && avctx->time_base.den > 0)
+        ctx->timebase = avctx->time_base;
+    else
+        ctx->timebase = (AVRational){ 1, 1000 };
+    return ctx->timebase;
+}
+
+static int64_t cedar_frame_duration(AVCodecContext *avctx,
+                                    H264CedarContext *ctx)
+{
+    AVRational fr = ctx->stream_fps;
+    int64_t d;
+
+    if (fr.num <= 0 || fr.den <= 0)
+        fr = (AVRational){ 60, 1 };
+    d = av_rescale_q(1, av_inv_q(fr), cedar_timebase(avctx, ctx));
+    return d > 0 ? d : 1;
+}
+
+static int64_t cedar_pts(AVCodecContext *avctx, H264CedarContext *ctx,
+                         int64_t pts)
+{
+    if (pts != AV_NOPTS_VALUE && pts > INT64_MIN / 2) {
+        ctx->last_pts = pts;
         return pts;
-    return (int64_t)ctx->submitted * 1000000 / 60;
+    }
+    /*
+     * A packet without a pts (mpv leaves it unset for some streams). The
+     * value must be in the packet time base: a microsecond value read as
+     * 1/90000 ticks would stretch every frame by 90x.
+     */
+    if (ctx->last_pts == AV_NOPTS_VALUE)
+        ctx->last_pts = 0;
+    else
+        ctx->last_pts += cedar_frame_duration(avctx, ctx);
+    return ctx->last_pts;
 }
 
 static int cedar_submit(AVCodecContext *avctx, const uint8_t *data, int size,
@@ -629,10 +695,12 @@ static int cedar_submit(AVCodecContext *avctx, const uint8_t *data, int size,
         memcpy(ring, data + buf_size, size - buf_size);
     }
 
-    pts = cedar_pts(ctx, pts);
-    if (!ctx->submitted)
-        cedar_note("first SubmitVideoStreamData: %d bytes, pts %lld", size,
-                   (long long)pts);
+    pts = cedar_pts(avctx, ctx, pts);
+    if (ctx->submitted < 10 || ctx->submitted % 60 == 0)
+        cedar_note("submit %d: %d bytes, pts %lld (tb %d/%d)",
+                   ctx->submitted, size, (long long)pts,
+                   cedar_timebase(avctx, ctx).num,
+                   cedar_timebase(avctx, ctx).den);
     memset(&di, 0, sizeof(di));
     di.pData       = buf;
     di.nLength     = size;
@@ -817,11 +885,26 @@ static void cedar_take_picture(AVCodecContext *avctx, AVFrame *frame,
     ctx->nqueued--;
 
     if (cedar_copy_picture(avctx, frame, pic) == 0) {
-        /* The picture carries the pts of the access unit it came from;
-         * reordering happens inside the engine. */
+        /*
+         * The picture carries the pts of the access unit it came from: that
+         * is the only mapping that survives B-frame reordering. The fallback
+         * counter is never used here, because a wrong pts stretches or
+         * compresses the whole timeline.
+         */
         if (pic->nPts != AV_NOPTS_VALUE && pic->nPts > INT64_MIN / 2 &&
             pic->nPts != CEDAR_AU_MARKER)
             frame->pts = pic->nPts;
+        else
+            frame->pts = AV_NOPTS_VALUE;
+        frame->duration = cedar_frame_duration(avctx, ctx);
+        if (ctx->frame_count < 10 || ctx->frame_count % 60 == 0)
+            cedar_note("frame %lld out: picture pts %lld, frame pts %lld, "
+                       "duration %lld, tb %d/%d",
+                       (long long)ctx->frame_count, (long long)pic->nPts,
+                       (long long)frame->pts, (long long)frame->duration,
+                       cedar_timebase(avctx, ctx).num,
+                       cedar_timebase(avctx, ctx).den);
+        ctx->frame_count++;
         *got_picture = 1;
     }
     cedar_api->return_picture(ctx->handle, pic);
@@ -1052,6 +1135,8 @@ static void h264_cedar_flush(AVCodecContext *avctx)
 {
     H264CedarContext *ctx = avctx->priv_data;
 
+    cedar_note("flush after %d access units, %lld frames out",
+               ctx->submitted, (long long)ctx->frame_count);
     /*
      * Seeks and discards must start clean. ResetVideoDecoder() is part of
      * the vendor API but its teardown has been where this unit aborted, so
@@ -1061,6 +1146,7 @@ static void h264_cedar_flush(AVCodecContext *avctx)
      */
     ctx->flushed = 0;
     ctx->eof_returned = 0;
+    ctx->last_pts = AV_NOPTS_VALUE;
     if (ctx->handle) {
         cedar_return_queued(ctx);
         ctx->pending_frames = 0;
