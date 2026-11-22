@@ -495,13 +495,17 @@ static int cedar_open_decoder(AVCodecContext *avctx, int width, int height)
     info.nHeight          = height;
     /*
      * The engine wants the stream's frame timing; a live stream is 60 fps,
-     * a video file usually 24-30. avctx->framerate is filled from the SPS by
-     * libavcodec before the first picture arrives; 60 is only the fallback
-     * the wrapper uses.
+     * a video file usually 24-30, and it sizes its decode buffer from it.
+     * libavcodec fills avctx->framerate from the container, which the app
+     * always has, before the first packet; the SPS comes next for a raw
+     * stream, and 60 is only the last resort for a caller that gives none.
      */
     {
         AVRational fr = avctx->framerate;
 
+        if (fr.num <= 0 || fr.den <= 0)
+            fr = avctx->time_base.num > 0 ? av_inv_q(avctx->time_base)
+                                          : (AVRational){ 60, 1 };
         if (fr.num <= 0 || fr.den <= 0) {
             fr.num = 60;
             fr.den = 1;
