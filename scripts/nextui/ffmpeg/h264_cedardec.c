@@ -433,6 +433,15 @@ fail:
 
 #define CEDAR_AU_MARKER  0x7f7f7f7f /* pts of the "flush" access unit */
 
+/*
+ * Pictures the engine has finished and that have not been handed out yet.
+ * The engine can release several at once (after buffering, a flush or a
+ * seek); libavcodec takes one frame per call, so the rest wait in decode
+ * order. Dropping them, as a live-stream decoder may, shows up as periodic
+ * frame losses in a video file.
+ */
+#define CEDAR_MAX_QUEUED 16
+
 #define CEDAR_PARSE_WAIT_NS 10000000ull /* how long to wait for the parser */
 #define CEDAR_VBV_BYTES  (4 << 20)
 
@@ -443,6 +452,8 @@ typedef struct H264CedarContext {
     int logged_picture;  /* first picture already described in the log */
     int submitted;       /* access units accepted by the vendor parser */
     int pending_frames;  /* access units submitted but not decoded yet */
+    CedarVideoPicture *queued[CEDAR_MAX_QUEUED]; /* decoded, not yet handed out */
+    int nqueued;
     int decoded;         /* at least one picture came out */
     int64_t parse_deadline; /* when to stop waiting for the parser */
     int flushed;         /* trailing access unit submitted after EOF */
@@ -460,6 +471,8 @@ static const char *cedar_result_name(int result)
         return names[result];
     return "error";
 }
+
+static void cedar_return_queued(H264CedarContext *ctx);
 
 static int cedar_open_decoder(AVCodecContext *avctx, int width, int height)
 {
@@ -556,6 +569,7 @@ static void cedar_close_decoder(AVCodecContext *avctx)
     av_bsf_free(&ctx->annexb);
     if (!ctx->handle)
         return;
+    cedar_return_queued(ctx);
     /*
      * The teardown the device test exercised is Initialize -> Submit ->
      * Destroy (tsp-videotest). A decoder that was initialized but never fed
@@ -574,10 +588,10 @@ static void cedar_close_decoder(AVCodecContext *avctx)
 }
 
 /*
- * The vendor parser aborts on AV_NOPTS_VALUE (INT64_MIN): libawh264 asserts on
- * it instead of ignoring it. Every submitted access unit gets a real pts, a
- * monotonic microsecond counter (as tsp-videotest uses) when the packet has
- * none.
+ * The vendor parser aborts on AV_NOPTS_VALUE (INT64_MIN): libawh264 asserts
+ * on it instead of ignoring it, so a packet without a pts gets a monotonic
+ * one. The picture carries it back, which is how an output frame is matched
+ * to the access unit it came from.
  */
 static int64_t cedar_pts(H264CedarContext *ctx, int64_t pts)
 {
@@ -744,36 +758,60 @@ static int cedar_copy_picture(AVCodecContext *avctx, AVFrame *frame,
  * Every exit is a normal return: libavcodec turns a negative value into a
  * decode error, and mpv counts those. Nothing here aborts.
  */
+/*
+ * Pictures the engine has finished and that have not been handed out yet.
+ * The engine can release several at once (after buffering, a flush or a
+ * seek); libavcodec takes one frame per call, so the rest wait here in
+ * decode order. Dropping them, as a live-stream decoder may, would show up
+ * as periodic frame losses in a video file.
+ */
+static void cedar_return_queued(H264CedarContext *ctx)
+{
+    while (ctx->nqueued > 0)
+        cedar_api->return_picture(ctx->handle, ctx->queued[--ctx->nqueued]);
+}
+
+/* Moves every finished picture into the queue, oldest first. */
+static void cedar_collect_pictures(AVCodecContext *avctx)
+{
+    H264CedarContext *ctx = avctx->priv_data;
+    CedarVideoPicture *pic;
+
+    while ((pic = cedar_api->request_picture(ctx->handle, 0)) != NULL) {
+        if (pic->bFrameErrorFlag || ctx->nqueued >= CEDAR_MAX_QUEUED) {
+            cedar_api->return_picture(ctx->handle, pic);
+            continue;
+        }
+        ctx->queued[ctx->nqueued++] = pic;
+    }
+}
+
+/* Hands the oldest queued picture to libavcodec. */
 static void cedar_take_picture(AVCodecContext *avctx, AVFrame *frame,
                                int *got_picture)
 {
     H264CedarContext *ctx = avctx->priv_data;
-    CedarVideoPicture *pic, *latest = NULL;
+    CedarVideoPicture *pic;
 
-    while ((pic = cedar_api->request_picture(ctx->handle, 0)) != NULL) {
-        if (latest)
-            cedar_api->return_picture(ctx->handle, latest);
-        latest = pic;
-    }
-    if (!latest)
+    *got_picture = 0;
+    if (ctx->nqueued == 0)
         return;
+    pic = ctx->queued[0];
+    memmove(ctx->queued, ctx->queued + 1,
+            (size_t)(ctx->nqueued - 1) * sizeof(*ctx->queued));
+    ctx->nqueued--;
 
-    if (latest->bFrameErrorFlag) {
-        cedar_api->return_picture(ctx->handle, latest);
-        return;
-    }
-    if (cedar_copy_picture(avctx, frame, latest) == 0)
+    if (cedar_copy_picture(avctx, frame, pic) == 0) {
+        /* The picture carries the pts of the access unit it came from;
+         * reordering happens inside the engine. */
+        if (pic->nPts != AV_NOPTS_VALUE && pic->nPts > INT64_MIN / 2 &&
+            pic->nPts != CEDAR_AU_MARKER)
+            frame->pts = pic->nPts;
         *got_picture = 1;
-    cedar_api->return_picture(ctx->handle, latest);
+    }
+    cedar_api->return_picture(ctx->handle, pic);
 }
 
-/*
- * One decode step, as in the proven engine path: after an access unit has
- * been submitted, DecodeVideoStream reports whether a frame came out. A
- * "needs more input" answer is not retried here, it goes back to libavcodec
- * as EAGAIN so the next packet is fed, exactly like cedar_sdl.c, which calls
- * decode once per received frame.
- */
 static int cedar_step(AVCodecContext *avctx, AVFrame *frame, int *got_picture)
 {
     H264CedarContext *ctx = avctx->priv_data;
@@ -788,6 +826,8 @@ static int cedar_step(AVCodecContext *avctx, AVFrame *frame, int *got_picture)
     case CEDAR_RESULT_KEYFRAME_DECODED:
         if (ctx->pending_frames > 0)
             ctx->pending_frames--;
+        /* Take everything the engine finished, then hand out the oldest. */
+        cedar_collect_pictures(avctx);
         cedar_take_picture(avctx, frame, got_picture);
         ctx->decoded = 1;
         return 0;
@@ -883,6 +923,17 @@ static int h264_cedar_decode(AVCodecContext *avctx, AVFrame *frame,
             return AVERROR_EOF;
         }
         return 0;
+    }
+
+    /*
+     * The engine can finish several pictures at once (buffering, a flush, a
+     * seek). They wait in the queue and go out one per call, oldest first,
+     * before another packet is consumed: dropping or reordering them here
+     * would show as lost or repeated frames.
+     */
+    if (ctx->nqueued > 0) {
+        cedar_take_picture(avctx, frame, got_frame);
+        return avpkt->size;
     }
 
     if (!ctx->handle) {
@@ -990,7 +1041,11 @@ static void h264_cedar_flush(AVCodecContext *avctx)
      */
     ctx->flushed = 0;
     ctx->eof_returned = 0;
-    if (ctx->handle && ctx->decoded && !ctx->pending_frames)
+    if (ctx->handle) {
+        cedar_return_queued(ctx);
+        ctx->pending_frames = 0;
+    }
+    if (ctx->handle && ctx->decoded)
         cedar_api->reset(ctx->handle);
 }
 
