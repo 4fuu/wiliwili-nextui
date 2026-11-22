@@ -22,7 +22,8 @@
  * 1/1000, which is what mpv does with the packet timestamps it gets from the
  * container. If the frame pts printed per frame are not i*step, or frame
  * pts differs from picture pts in the h264_cedar trace, the timeline the
- * player sees is wrong.
+ * player sees is wrong. The decoder hands out N frames for N access units;
+ * the summary says so when it does not.
  *
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -112,6 +113,13 @@ static size_t split_aus(const uint8_t *data, size_t len, struct au **out)
             int type = p[sc] & 0x1f;
             int new_picture = 0;
 
+            /*
+             * A delimiter always starts a new access unit; in a stream
+             * without them, a picture starts at a slice whose
+             * first_mb_in_slice is 0. Slice headers of the pictures that do
+             * have a delimiter also start with a 1 bit, so only slices seen
+             * since the last boundary can start a new picture here.
+             */
             if (type == 9)
                 new_picture = p > start;
             else if (slice_seen && (type == 1 || type == 5) &&
@@ -240,7 +248,6 @@ int main(int argc, char **argv)
     int quiet = 0, limit = 0, opt, ret;
     int fps = 30;
     int64_t step = 0;   /* pts step in the 1/1000 time base */
-    int64_t last_pts = 0;
 
     while ((opt = getopt(argc, argv, "qn:f:s:")) != -1) {
         switch (opt) {
@@ -413,7 +420,6 @@ int main(int argc, char **argv)
         pkt->data = (uint8_t *)aus[i].data;
         pkt->size = (int)aus[i].size;
         pkt->pts = pkt->dts = (int64_t)i * step;
-        last_pts = pkt->pts;
         ret = avcodec_send_packet(ctx, pkt);
         sent++;
         if (ret < 0) {
@@ -453,7 +459,7 @@ int main(int argc, char **argv)
     /* Flush whatever the decoder still holds. */
     pkt->data = NULL;
     pkt->size = 0;
-    pkt->pts = pkt->dts = last_pts + step;
+    pkt->pts = pkt->dts = AV_NOPTS_VALUE;
     avcodec_send_packet(ctx, pkt);
     while (avcodec_receive_frame(ctx, frame) == 0) {
         frames++;
@@ -462,9 +468,13 @@ int main(int argc, char **argv)
                     (long long)frame->pts);
         av_frame_unref(frame);
     }
-    fprintf(stderr, "cedar-decode: pts step %lld in 1/1000, expected last "
-                    "frame pts %lld\n", (long long)step,
-            (long long)(nau - 1) * step);
+    if (frames > nau)
+        fprintf(stderr, "cedar-decode: %zu access units in, %zu frames out "
+                        "(%zu repeated)\n", nau, frames, frames - nau);
+    if (!quiet)
+        fprintf(stderr, "cedar-decode: pts step %lld in 1/1000, expected last "
+                        "frame pts %lld\n", (long long)step,
+                (long long)(nau - 1) * step);
 
     avcodec_free_context(&ctx);
     av_packet_free(&pkt);

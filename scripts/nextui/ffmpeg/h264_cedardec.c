@@ -453,6 +453,7 @@ typedef struct H264CedarContext {
     int pending_frames;  /* access units submitted but not decoded yet */
     CedarVideoPicture *queued[CEDAR_MAX_QUEUED]; /* decoded, not yet handed out */
     int nqueued;
+    int dropped;         /* pictures the engine handed back as errors */
     int decoded;         /* at least one picture came out */
     const char *closing_reason; /* for the trace */
     AVRational stream_fps;   /* from the SPS, for frame duration */
@@ -839,11 +840,23 @@ static void cedar_collect_pictures(AVCodecContext *avctx)
 
     while ((pic = cedar_api->request_picture(ctx->handle, 0)) != NULL) {
         if (pic->bFrameErrorFlag || ctx->nqueued >= CEDAR_MAX_QUEUED) {
+            /*
+             * A dropped picture is a lost frame, never silent: a wrong or
+             * missing picture shows up in the player as a skipped frame.
+             */
+            ctx->dropped++;
+            if (ctx->dropped <= 10)
+                cedar_note("picture pts %lld dropped (error flag %d, "
+                           "queue %d)", (long long)pic->nPts,
+                           pic->bFrameErrorFlag, ctx->nqueued);
             cedar_api->return_picture(ctx->handle, pic);
             continue;
         }
         ctx->queued[ctx->nqueued++] = pic;
     }
+    if (cedar_verbose() && ctx->submitted <= 3)
+        cedar_note("after %d access units: %d pictures queued, %d dropped",
+                   ctx->submitted, ctx->nqueued, ctx->dropped);
 }
 
 /*
