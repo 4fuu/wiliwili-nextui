@@ -454,6 +454,7 @@ typedef struct H264CedarContext {
     CedarVideoPicture *queued[CEDAR_MAX_QUEUED]; /* decoded, not yet handed out */
     int nqueued;
     int dropped;         /* pictures the engine handed back as errors */
+    int copy_failures;   /* pictures that could not be turned into a frame */
     int decoded;         /* at least one picture came out */
     const char *closing_reason; /* for the trace */
     AVRational stream_fps;   /* from the SPS, for frame duration */
@@ -852,6 +853,9 @@ static void cedar_collect_pictures(AVCodecContext *avctx)
             cedar_api->return_picture(ctx->handle, pic);
             continue;
         }
+        if (cedar_verbose() && ctx->submitted <= 3)
+            cedar_note("picture out of the engine: pts %lld, error flag %d",
+                       (long long)pic->nPts, pic->bFrameErrorFlag);
         ctx->queued[ctx->nqueued++] = pic;
     }
     if (cedar_verbose() && ctx->submitted <= 3)
@@ -870,7 +874,7 @@ static void cedar_take_picture(AVCodecContext *avctx, AVFrame *frame,
 {
     H264CedarContext *ctx = avctx->priv_data;
     CedarVideoPicture *pic;
-    int i, best = 0;
+    int i, best = 0, ret;
 
     *got_picture = 0;
     if (ctx->nqueued == 0)
@@ -883,7 +887,11 @@ static void cedar_take_picture(AVCodecContext *avctx, AVFrame *frame,
             (size_t)(ctx->nqueued - best - 1) * sizeof(*ctx->queued));
     ctx->nqueued--;
 
-    if (cedar_copy_picture(avctx, frame, pic) == 0) {
+    ret = cedar_copy_picture(avctx, frame, pic);
+    if (ret < 0 && !ctx->copy_failures++)
+        cedar_warn("picture pts %lld could not be copied (%d)",
+                   (long long)pic->nPts, ret);
+    if (ret == 0) {
         /*
          * The picture carries the pts of the access unit it came from: that
          * is the only mapping that survives B-frame reordering. The fallback
